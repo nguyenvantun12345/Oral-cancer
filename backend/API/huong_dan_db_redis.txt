@@ -1,0 +1,475 @@
+# Hướng Dẫn Sử Dụng db_redis.py
+
+## Tổng Quan
+File `db_redis.py` triển khai lớp `RedisCache` để quản lý bộ đệm Redis, hoạt động như một tầng trung gian giữa API và cơ sở dữ liệu MongoDB. Lớp này cung cấp các phương thức CRUD (Tạo, Đọc, Cập nhật, Xóa) cho dữ liệu bệnh nhân và lịch sử y tế, lưu trữ dữ liệu trong Redis để tăng hiệu suất truy vấn. Ngoài ra, file hỗ trợ lưu trữ dữ liệu từ Airflow vào bộ đệm và quản lý việc xóa bộ đệm theo mẫu khóa. File sử dụng thư viện `redis` để tương tác với Redis, `pandas` để xử lý dữ liệu từ Airflow, và phụ thuộc vào `db_query.py` (cho các lớp `Patient` và `MedicalHistoryCRUD`) và `db_config.py` (cho hàm `get_database`).
+
+## Lớp và Phương Thức
+
+### Lớp: `RedisCache`
+- **Nhiệm vụ**: Quản lý bộ đệm Redis và cung cấp các thao tác CRUD cho bệnh nhân và lịch sử y tế, đồng thời hỗ trợ lưu trữ dữ liệu từ Airflow và xóa bộ đệm.
+- **Phụ thuộc**:
+  - Thư viện: `redis`, `pandas`, `json`, `os`, `uuid`, `datetime`, `typing`.
+  - File: `db_query.py` (cho `Patient` và `MedicalHistoryCRUD`), `db_config.py` (cho `get_database`).
+- **Thuộc tính chính**:
+  - `redis`: Đối tượng `redis.Redis` để tương tác với Redis.
+  - `ttl`: Thời gian sống của bộ đệm (tính bằng giây).
+  - `patient_repo`: Phiên bản của lớp `Patient` để thao tác với dữ liệu bệnh nhân.
+  - `history_repo`: Phiên bản của lớp `MedicalHistoryCRUD` để thao tác với lịch sử y tế.
+
+#### 1. `RedisCache.__init__(self, ttl_seconds: int = 3600)`
+- **Nhiệm vụ**: Khởi tạo kết nối Redis và thiết lập các repository MongoDB.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `ttl_seconds`: Thời gian sống của dữ liệu trong bộ đệm (tính bằng giây, mặc định: 3600).
+- **Đầu ra**: Không có (thiết lập các thuộc tính `redis`, `ttl`, `patient_repo`, `history_repo`).
+- **Tham số**:
+  - `ttl_seconds`: `int`, thời gian sống của bộ đệm.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `ttl_seconds` (`int`).
+  - Đầu ra: Không có.
+- **Mô tả**: Gọi `_connect_redis` để thiết lập kết nối Redis, khởi tạo `patient_repo` (`Patient`) và `history_repo` (`MedicalHistoryCRUD`), và lưu `ttl_seconds` làm thời gian sống của bộ đệm. Ghi log khi kết nối thành công.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache(ttl_seconds=3600)
+  print("Khởi tạo RedisCache thành công với TTL 3600 giây")
+  ```
+
+#### 2. `RedisCache._connect_redis(self) -> redis.Redis`
+- **Nhiệm vụ**: Thiết lập kết nối tới Redis sử dụng cấu hình từ biến môi trường.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+- **Đầu ra**: Đối tượng `redis.Redis` để tương tác với Redis.
+- **Tham số**: Không có.
+- **Kiểu dữ liệu**:
+  - Đầu ra: `redis.Redis`.
+- **Mô tả**: Tạo kết nối Redis với các tham số từ biến môi trường (`REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD`). Thực hiện lệnh `ping` để kiểm tra kết nối. Nếu thất bại, ném lỗi `RedisConnectionError` và ghi log lỗi.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  redis_client = redis_cache._connect_redis()
+  print(redis_client.ping())  # In ra: True nếu kết nối thành công
+  ```
+
+#### 3. `RedisCache._retry_on_failure(self, func, *args, max_retries: int = 3, **kwargs)`
+- **Nhiệm vụ**: Thử lại một hàm Redis nếu xảy ra lỗi kết nối.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `func`: Hàm Redis cần thực thi (ví dụ: `redis.set`, `redis.get`).
+  - `*args`: Các đối số vị trí cho `func`.
+  - `max_retries`: Số lần thử lại tối đa (mặc định: 3).
+  - `**kwargs`: Các đối số từ khóa cho `func`.
+- **Đầu ra**: Kết quả của `func` hoặc `None` nếu vượt quá số lần thử.
+- **Tham số**:
+  - `func`: Hàm Redis (callable).
+  - `max_retries`: `int`, số lần thử lại.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `func` (callable), `max_retries` (`int`), `*args` (tùy thuộc vào `func`), `**kwargs` (tùy thuộc vào `func`).
+  - Đầu ra: Kết quả của `func` hoặc `None`.
+- **Mô tả**: Thực thi `func` với các đối số cung cấp. Nếu xảy ra `RedisConnectionError`, thử kết nối lại Redis và thực thi lại `func`, tối đa `max_retries` lần. Ghi log cảnh báo cho mỗi lần thử và lỗi nếu vượt quá số lần thử.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  result = redis_cache._retry_on_failure(redis_cache.redis.set, "test_key", "test_value", max_retries=2)
+  print(result)  # In ra: True nếu thiết lập thành công
+  ```
+
+#### 4. `RedisCache._serialize_mongo_document(self, data: Dict) -> Dict`
+- **Nhiệm vụ**: Chuyển đổi các trường không thể serialize thành JSON (như `ObjectId`) thành chuỗi để lưu vào Redis.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `data`: Từ điển chứa dữ liệu MongoDB.
+- **Đầu ra**: Từ điển đã được serialize (các trường như `_id` được chuyển thành chuỗi).
+- **Tham số**:
+  - `data`: `Dict`, từ điển chứa dữ liệu MongoDB.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `data` (`Dict`).
+  - Đầu ra: `Dict`.
+- **Mô tả**: Sao chép `data`, chuyển trường `_id` (nếu có) thành chuỗi, và trả về từ điển đã serialize. Nếu `data` là `None` hoặc rỗng, trả về nguyên bản.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  from bson import ObjectId
+  redis_cache = RedisCache()
+  data = {"_id": ObjectId("507f1f77bcf86cd799439011"), "name": "Nguyễn Văn A"}
+  serialized = redis_cache._serialize_mongo_document(data)
+  print(serialized)  # In ra: {'_id': '507f1f77bcf86cd799439011', 'name': 'Nguyễn Văn A'}
+  ```
+
+#### 5. `RedisCache.create_patient(self, patients: List[Dict]) -> List[str]`
+- **Nhiệm vụ**: Tạo các bệnh nhân mới trong MongoDB và lưu dữ liệu vào bộ đệm Redis.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `patients`: Danh sách các từ điển chứa dữ liệu bệnh nhân (ví dụ: `user_id`, `username`, `name`).
+- **Đầu ra**: Danh sách các chuỗi `user_id` của các bệnh nhân đã tạo.
+- **Tham số**:
+  - `patients`: `List[Dict]`, danh sách từ điển chứa thông tin bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `patients` (`List[Dict]`).
+  - Đầu ra: `List[str]`.
+- **Mô tả**: Gọi `patient_repo.createPatient` để chèn bệnh nhân vào MongoDB. Nếu thành công, lưu dữ liệu vào Redis với hai khóa: `user:<username>` và `patient:<user_id>`, sử dụng `setex` với thời gian sống `ttl`. Dữ liệu được serialize thành JSON trước khi lưu. Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache(ttl_seconds=3600)
+  patients = [
+      {
+          "user_id": "patient1",
+          "username": "nguyenvana",
+          "password": "matkhauan123",
+          "name": "Nguyễn Văn A",
+          "birthdate": "01/01/1990",
+          "gender": "male",
+          "role": "patient",
+          "email": "nguyenvana@example.com"
+      }
+  ]
+  user_ids = redis_cache.create_patient(patients)
+  print(user_ids)  # In ra: ['patient1']
+  ```
+
+#### 6. `RedisCache.get_patient_by_id(self, user_id: str) -> Optional[Dict]`
+- **Nhiệm vụ**: Lấy thông tin bệnh nhân theo `user_id` từ bộ đệm Redis hoặc MongoDB.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `user_id`: Định danh duy nhất của bệnh nhân.
+- **Đầu ra**: Từ điển chứa dữ liệu bệnh nhân hoặc `None` nếu không tìm thấy.
+- **Tham số**:
+  - `user_id`: `str`, định danh của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`).
+  - Đầu ra: `Optional[Dict]`.
+- **Mô tả**: Kiểm tra bộ đệm Redis với khóa `patient:<user_id>`. Nếu tìm thấy, trả về dữ liệu đã deserialize và tăng bộ đếm truy cập (`access_count:<user_id>`). Nếu không, truy vấn MongoDB qua `patient_repo.get_patient_by_id`, lưu kết quả vào Redis, tăng bộ đếm truy cập, và trả về dữ liệu. Ghi log cache hit hoặc miss.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  patient = redis_cache.get_patient_by_id("patient1")
+  print(patient)  # In ra: {'user_id': 'patient1', 'username': 'nguyenvana', ...}
+  ```
+
+#### 7. `RedisCache.get_cached_user(self, username: str) -> Optional[Dict]`
+- **Nhiệm vụ**: Lấy thông tin bệnh nhân theo `username` từ bộ đệm Redis hoặc MongoDB.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `username`: Tên người dùng của bệnh nhân.
+- **Đầu ra**: Từ điển chứa dữ liệu bệnh nhân hoặc `None` nếu không tìm thấy.
+- **Tham số**:
+  - `username`: `str`, tên người dùng.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `username` (`str`).
+  - Đầu ra: `Optional[Dict]`.
+- **Mô tả**: Kiểm tra bộ đệm Redis với khóa `user:<username>`. Nếu tìm thấy, trả về dữ liệu đã deserialize. Nếu không, sử dụng `patient_repo.search_patients` để tìm bệnh nhân, lưu kết quả vào Redis, tăng bộ đếm truy cập, và trả về dữ liệu. Ghi log cache hit hoặc miss.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  user = redis_cache.get_cached_user("nguyenvana")
+  print(user)  # In ra: {'user_id': 'patient1', 'username': 'nguyenvana', ...}
+  ```
+
+#### 8. `RedisCache.search_patients(self, search_text: str, limit: int = 10, skip: int = 0) -> List[Dict]`
+- **Nhiệm vụ**: Tìm kiếm bệnh nhân theo `name` hoặc `username` từ bộ đệm Redis hoặc MongoDB.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `search_text`: Chuỗi tìm kiếm (khớp với `name` hoặc `username`).
+  - `limit`: Số bản ghi tối đa trả về (mặc định: 10, tối đa: 100).
+  - `skip`: Số bản ghi bỏ qua để phân trang (mặc định: 0).
+- **Đầu ra**: Danh sách các từ điển chứa dữ liệu bệnh nhân khớp với tiêu chí tìm kiếm.
+- **Tham số**:
+  - `search_text`: `str`, chuỗi tìm kiếm.
+  - `limit`: `int`, số bản ghi tối đa.
+  - `skip`: `int`, số bản ghi bỏ qua.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `search_text` (`str`), `limit` (`int`), `skip` (`int`).
+  - Đầu ra: `List[Dict]`.
+- **Mô tả**: Kiểm tra bộ đệm với khóa `search:patients:<search_text>:<skip>:<limit>`. Nếu tìm thấy, trả về dữ liệu đã deserialize. Nếu không, gọi `patient_repo.search_patients`, lưu kết quả vào Redis, tăng bộ đếm truy cập cho từng bệnh nhân, và trả về danh sách. Ghi log cache hit hoặc miss.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  patients = redis_cache.search_patients("nguyen", limit=5, skip=0)
+  print(patients)  # In ra: [{'user_id': 'patient1', 'username': 'nguyenvana', ...}]
+  ```
+
+#### 9. `RedisCache.update_patient(self, user_id: str, patient_data: Dict) -> bool`
+- **Nhiệm vụ**: Cập nhật thông tin bệnh nhân trong MongoDB và làm mới bộ đệm Redis.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `user_id`: Định danh của bệnh nhân.
+  - `patient_data`: Từ điển chứa dữ liệu cần cập nhật.
+- **Đầu ra**: `True` nếu cập nhật thành công, `False` nếu không.
+- **Tham số**:
+  - `user_id`: `str`, định danh của bệnh nhân.
+  - `patient_data`: `Dict`, dữ liệu cần cập nhật.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), `patient_data` (`Dict`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Gọi `patient_repo.update_patient` để cập nhật bệnh nhân trong MongoDB. Nếu thành công, xóa bộ đệm liên quan (`user:*<user_id>*`, `patient:<user_id>`), lấy dữ liệu mới từ MongoDB, và lưu lại vào Redis với các khóa `user:<username>` và `patient:<user_id>`. Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  update_data = {"name": "Nguyễn Văn An"}
+  success = redis_cache.update_patient("patient1", update_data)
+  print(success)  # In ra: True
+  ```
+
+#### 10. `RedisCache.delete_patient(self, user_id: str) -> bool`
+- **Nhiệm vụ**: Xóa bệnh nhân trong MongoDB và làm mới bộ đệm Redis.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `user_id`: Định danh của bệnh nhân.
+- **Đầu ra**: `True` nếu xóa thành công, `False` nếu không.
+- **Tham số**:
+  - `user_id`: `str`, định danh của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Gọi `patient_repo.delete_patient` để xóa bệnh nhân trong MongoDB. Nếu thành công, xóa các khóa bộ đệm liên quan (`user:*<user_id>*`, `patient:<user_id>`, `medical:<user_id>:*`). Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  success = redis_cache.delete_patient("patient1")
+  print(success)  # In ra: True
+  ```
+
+#### 11. `RedisCache.create_medical_history(self, medical_history: Dict) -> bool`
+- **Nhiệm vụ**: Tạo lịch sử y tế mới trong MongoDB và lưu vào bộ đệm Redis.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `medical_history`: Từ điển chứa dữ liệu lịch sử y tế.
+- **Đầu ra**: `True` nếu tạo thành công, `False` nếu không.
+- **Tham số**:
+  - `medical_history`: `Dict`, dữ liệu lịch sử y tế.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `medical_history` (`Dict`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Gọi `history_repo.create_medical_history` để tạo lịch sử y tế trong MongoDB. Nếu thành công, serialize dữ liệu, chuyển các `datetime` trong trường `date` thành chuỗi ISO, và lưu vào Redis với khóa `medical:<user_id>:latest`. Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  medical_history = {
+      "user_id": "patient1",
+      "image_id": "img1",
+      "image": "https://example.com/image.jpg",
+      "comment": "Quét lần đầu",
+      "diagnosis_score": 0.85
+  }
+  success = redis_cache.create_medical_history(medical_history)
+  print(success)  # In ra: True
+  ```
+
+#### 12. `RedisCache.update_medical_history(self, user_id: str, medical_data: Dict) -> bool`
+- **Nhiệm vụ**: Cập nhật lịch sử y tế trong MongoDB và làm mới bộ đệm Redis.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `user_id`: Định danh của bệnh nhân.
+  - `medical_data`: Từ điển chứa dữ liệu cần cập nhật.
+- **Đầu ra**: `True` nếu cập nhật thành công, `False` nếu không.
+- **Tham số**:
+  - `user_id`: `str`, định danh của bệnh nhân.
+  - `medical_data`: `Dict`, dữ liệu cần cập nhật.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), `medical_data` (`Dict`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Gọi `history_repo.update_medical_history` để cập nhật lịch sử y tế. Nếu thành công, xóa các khóa bộ đệm liên quan (`medical:<user_id>:*`), lấy dữ liệu mới từ MongoDB, serialize, và lưu lại vào Redis với khóa `medical:<user_id>:latest`. Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  update_data = {"diagnosis_score": 0.9}
+  success = redis_cache.update_medical_history("patient1", update_data)
+  print(success)  # In ra: True
+  ```
+
+#### 13. `RedisCache.get_medical_history(self, user_id: str) -> Optional[Dict]`
+- **Nhiệm vụ**: Lấy lịch sử y tế theo `user_id` từ bộ đệm Redis hoặc MongoDB.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `user_id`: Định danh của bệnh nhân.
+- **Đầu ra**: Từ điển chứa dữ liệu lịch sử y tế hoặc `None` nếu không tìm thấy.
+- **Tham số**:
+  - `user_id`: `str`, định danh của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`).
+  - Đầu ra: `Optional[Dict]`.
+- **Mô tả**: Kiểm tra bộ đệm Redis với khóa `medical:<user_id>:latest`. Nếu tìm thấy, trả về dữ liệu đã deserialize. Nếu không, gọi `history_repo.get_medical_history_by_user_id`, serialize dữ liệu, lưu vào Redis, và trả về. Ghi log cache hit hoặc miss.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  history = redis_cache.get_medical_history("patient1")
+  print(history)  # In ra: {'user_id': 'patient1', 'image_id': 'img1', ...}
+  ```
+
+#### 14. `RedisCache.delete_medical_history(self, user_id: str) -> bool`
+- **Nhiệm vụ**: Xóa lịch sử y tế trong MongoDB và làm mới bộ đệm Redis.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `user_id`: Định danh của bệnh nhân.
+- **Đầu ra**: `True` nếu xóa thành công, `False` nếu không.
+- **Tham số**:
+  - `user_id`: `str`, định danh của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Gọi `history_repo.delete_medical_history` để xóa lịch sử y tế trong MongoDB. Nếu thành công, xóa các khóa bộ đệm liên quan (`medical:<user_id>:*`). Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  success = redis_cache.delete_medical_history("patient1")
+  print(success)  # In ra: True
+  ```
+
+#### 15. `RedisCache.cache_from_airflow(self, combined_records: List[Dict], limit: int = 100) -> int`
+- **Nhiệm vụ**: Lưu trữ dữ liệu từ Airflow (kết quả của `fetch_and_export_to_excel`) vào bộ đệm Redis.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `combined_records`: Danh sách các từ điển chứa dữ liệu từ Airflow.
+  - `limit`: Số bản ghi tối đa để lưu vào bộ đệm (mặc định: 100).
+- **Đầu ra**: Số bản ghi đã được lưu vào bộ đệm.
+- **Tham số**:
+  - `combined_records`: `List[Dict]`, danh sách bản ghi từ Airflow.
+  - `limit`: `int`, số bản ghi tối đa.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `combined_records` (`List[Dict]`), `limit` (`int`).
+  - Đầu ra: `int`.
+- **Mô tả**: Chuyển `combined_records` thành DataFrame bằng `pandas`. Nếu DataFrame rỗng, trả về 0. Lấy số lần truy cập (`access_count`) từ Redis cho từng `user_id`. Sắp xếp bản ghi theo `diagnosis_score` (nếu có) và `access_count`, lấy tối đa `limit` bản ghi. Lưu dữ liệu bệnh nhân vào Redis với các khóa `user:<username>` và `patient:<user_id>`, và lưu dữ liệu lịch sử y tế (nếu có) với khóa `medical:<user_id>:latest`. Ghi log số bản ghi đã lưu hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  from datetime import datetime, timezone
+  redis_cache = RedisCache()
+  records = [
+      {
+          "user_id": "patient1",
+          "username": "nguyenvana",
+          "name": "Nguyễn Văn A",
+          "email": "nguyenvana@example.com",
+          "image_id": "img1",
+          "image": "https://example.com/image.jpg",
+          "diagnosis_score": 0.85,
+          "date": datetime.now(timezone.utc).isoformat(),
+          "role": "patient",
+          "gender": "male",
+          "birthdate": "01/01/1990"
+      }
+  ]
+  count = redis_cache.cache_from_airflow(records, limit=1)
+  print(count)  # In ra: 1
+  ```
+
+#### 16. `RedisCache.invalidate_cache(self, prefix: str = "user:*") -> int`
+- **Nhiệm vụ**: Xóa các khóa bộ đệm Redis theo mẫu prefix.
+- **Đầu vào**:
+  - `self`: Phiên bản của `RedisCache`.
+  - `prefix`: Mẫu khóa cần xóa (mặc định: `user:*`).
+- **Đầu ra**: Số khóa đã xóa.
+- **Tham số**:
+  - `prefix`: `str`, mẫu khóa (ví dụ: `user:*`, `patient:*`, `medical:*`).
+- **Kiểu dữ liệu**:
+  - Đầu vào: `prefix` (`str`).
+  - Đầu ra: `int`.
+- **Mô tả**: Sử dụng `redis.scan` để tìm các khóa khớp với `prefix`, xóa chúng bằng `redis.delete`. Lặp lại cho đến khi không còn khóa nào khớp. Ghi log số khóa đã xóa hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_redis import RedisCache
+  redis_cache = RedisCache()
+  deleted_count = redis_cache.invalidate_cache("user:*")
+  print(deleted_count)  # In ra: Số khóa đã xóa
+  ```
+
+## Lưu Ý Khi Sử Dụng
+- **Cấu hình Redis**: Đảm bảo các biến môi trường (`REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD`) được thiết lập đúng để kết nối Redis.
+- **Phụ thuộc**: File yêu cầu `db_query.py` và `db_config.py` hoạt động đúng. Đảm bảo MongoDB được cấu hình và các lớp `Patient`, `MedicalHistoryCRUD` hoạt động.
+- **Thời gian sống (TTL)**: Giá trị `ttl_seconds` quyết định thời gian dữ liệu tồn tại trong Redis. Điều chỉnh phù hợp với yêu cầu hiệu suất.
+- **Xử lý lỗi**: Các phương thức sử dụng `_retry_on_failure` để xử lý lỗi kết nối Redis, nhưng cần theo dõi log để phát hiện vấn đề dai dẳng.
+- **Dữ liệu Airflow**: Phương thức `cache_from_airflow` yêu cầu dữ liệu đầu vào có định dạng nhất quán với các trường như `user_id`, `username`, `image_id`, v.v.
+- **Ghi log**: File sử dụng hệ thống ghi log để theo dõi cache hit/miss, lỗi kết nối, và các thao tác CRUD. Kiểm tra log để chẩn đoán vấn đề.
+
+## Ví Dụ Quy Trình Sử Dụng
+```python
+from db_redis import RedisCache
+from datetime import datetime, timezone
+
+# Khởi tạo RedisCache
+redis_cache = RedisCache(ttl_seconds=3600)
+
+# Tạo bệnh nhân
+patient_data = [
+    {
+        "user_id": "patient1",
+        "username": "nguyenvana",
+        "password": "matkhauan123",
+        "name": "Nguyễn Văn A",
+        "birthdate": "01/01/1990",
+        "gender": "male",
+        "role": "patient",
+        "email": "nguyenvana@example.com"
+    }
+]
+user_ids = redis_cache.create_patient(patient_data)
+print(f"Đã tạo bệnh nhân: {user_ids}")
+
+# Lấy thông tin bệnh nhân
+patient = redis_cache.get_patient_by_id("patient1")
+print(f"Bệnh nhân: {patient}")
+
+# Tạo lịch sử y tế
+medical_history = {
+    "user_id": "patient1",
+    "image_id": "img1",
+    "image": "https://example.com/image.jpg",
+    "comment": "Quét lần đầu",
+    "diagnosis_score": 0.85
+}
+success = redis_cache.create_medical_history(medical_history)
+print(f"Tạo lịch sử y tế: {success}")
+
+# Cập nhật lịch sử y tế
+update_medical = {"diagnosis_score": 0.9}
+success = redis_cache.update_medical_history("patient1", update_medical)
+print(f"Cập nhật lịch sử y tế: {success}")
+
+# Tìm kiếm bệnh nhân
+patients = redis_cache.search_patients("nguyen", limit=5)
+print(f"Kết quả tìm kiếm: {patients}")
+
+# Lưu dữ liệu từ Airflow
+airflow_records = [
+    {
+        "user_id": "patient1",
+        "username": "nguyenvana",
+        "name": "Nguyễn Văn A",
+        "email": "nguyenvana@example.com",
+        "image_id": "img1",
+        "image": "https://example.com/image.jpg",
+        "diagnosis_score": 0.85,
+        "date": datetime.now(timezone.utc).isoformat(),
+        "role": "patient",
+        "gender": "male",
+        "birthdate": "01/01/1990"
+    }
+]
+count = redis_cache.cache_from_airflow(airflow_records, limit=1)
+print(f"Đã lưu {count} bản ghi từ Airflow")
+
+# Xóa bệnh nhân và lịch sử y tế
+success = redis_cache.delete_medical_history("patient1")
+print(f"Xóa lịch sử y tế: {success}")
+success = redis_cache.delete_patient("patient1")
+print(f"Xóa bệnh nhân: {success}")
+
+# Xóa bộ đệm
+deleted_count = redis_cache.invalidate_cache("user:*")
+print(f"Đã xóa {deleted_count} khóa bộ đệm")
+```
+
+## Kết Luận
+File `db_redis.py` cung cấp một lớp `RedisCache` mạnh mẽ để tối ưu hóa hiệu suất truy vấn bằng cách sử dụng Redis làm bộ đệm. Các phương thức được thiết kế để xử lý lỗi an toàn, tích hợp chặt chẽ với MongoDB thông qua `db_query.py`, và hỗ trợ lưu trữ dữ liệu từ Airflow. Việc sử dụng đúng các phương thức và theo dõi log sẽ giúp đảm bảo hệ thống hoạt động ổn định và hiệu quả.

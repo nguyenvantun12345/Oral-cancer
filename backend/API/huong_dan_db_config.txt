@@ -1,0 +1,112 @@
+# Hướng Dẫn Sử Dụng db_config.py
+
+## Tổng Quan
+File `db_config.py` quản lý kết nối tới cơ sở dữ liệu MongoDB sử dụng thư viện `pymongo`. File triển khai mẫu singleton cho lớp `MongoDBConnection` để đảm bảo chỉ có một phiên bản kết nối, cung cấp các phương thức để kiểm tra và kết nối lại cơ sở dữ liệu, đồng thời giám sát kích thước cơ sở dữ liệu. File cũng bao gồm hệ thống ghi log để theo dõi trạng thái kết nối và lỗi.
+
+## Các Hàm và Phương Thức
+
+### 1. `MongoDBConnection.__new__(cls)`
+- **Nhiệm vụ**: Triển khai mẫu singleton để đảm bảo chỉ có một phiên bản của `MongoDBConnection`.
+- **Đầu vào**:
+  - `cls`: Tham chiếu lớp (được truyền ngầm).
+- **Đầu ra**: Trả về phiên bản duy nhất của `MongoDBConnection`.
+- **Tham số**: Không có.
+- **Kiểu dữ liệu**: Không áp dụng.
+- **Mô tả**: Tạo một phiên bản mới chỉ khi `_instance` là `None`, sau đó gọi `_connect` để thiết lập kết nối MongoDB.
+- **Ví dụ**:
+  ```python
+  from db_config import MongoDBConnection
+  conn1 = MongoDBConnection()
+  conn2 = MongoDBConnection()
+  print(conn1 is conn2)  # True (cùng phiên bản)
+  ```
+
+### 2. `MongoDBConnection._connect(self)`
+- **Nhiệm vụ**: Thiết lập kết nối tới cơ sở dữ liệu MongoDB sử dụng URI và cấu hình được cung cấp.
+- **Đầu vào**:
+  - `self`: Phiên bản của `MongoDBConnection`.
+- **Đầu ra**: Không có (thiết lập `self.client` và `self.db`).
+- **Tham số**: Không có.
+- **Kiểu dữ liệu**: Không áp dụng.
+- **Mô tả**: Kết nối tới MongoDB sử dụng `MongoClient` với các tham số được chỉ định (ví dụ: `maxPoolSize`, `connectTimeoutMS`). Thực hiện lệnh ping để kiểm tra kết nối. Ghi log thành công hoặc ném lỗi `ConnectionError` khi thất bại.
+- **Ví dụ**:
+  ```python
+  from db_config import MongoDBConnection
+  conn = MongoDBConnection()
+  # Kết nối được thiết lập tự động qua __new__ và _connect
+  print(conn.db.name)  # In ra: MyProject
+  ```
+
+### 3. `MongoDBConnection.check_and_reconnect(self)`
+- **Nhiệm vụ**: Kiểm tra trạng thái kết nối và kết nối lại nếu cần.
+- **Đầu vào**:
+  - `self`: Phiên bản của `MongoDBConnection`.
+- **Đầu ra**: `bool` (`True` nếu kết nối hoạt động hoặc kết nối lại thành công).
+- **Tham số**: Không có.
+- **Kiểu dữ liệu**: Trả về `bool`.
+- **Mô tả**: Gửi lệnh ping tới server MongoDB. Nếu ping thất bại, thử kết nối lại bằng cách gọi `_connect`. Ghi log cảnh báo và các lần thử kết nối lại.
+- **Ví dụ**:
+  ```python
+  from db_config import MongoDBConnection
+  conn = MongoDBConnection()
+  is_connected = conn.check_and_reconnect()
+  print(is_connected)  # True nếu đã kết nối hoặc kết nối lại thành công
+  ```
+
+### 4. `MongoDBConnection.check_database_size(self, threshold_gb=490)`
+- **Nhiệm vụ**: Kiểm tra kích thước cơ sở dữ liệu so với ngưỡng (tính bằng GB).
+- **Đầu vào**:
+  - `self`: Phiên bản của `MongoDBConnection`.
+  - `threshold_gb`: Kích thước tối đa cho phép của cơ sở dữ liệu tính bằng GB (mặc định: 490).
+- **Đầu ra**: `bool` (`True` nếu kích thước dưới ngưỡng, `False` nếu vượt ngưỡng, hoặc kết quả của `check_and_reconnect` khi có lỗi).
+- **Tham số**:
+  - `threshold_gb`: `int` hoặc `float`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `threshold_gb` (`int` hoặc `float`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Truy vấn thống kê cơ sở dữ liệu bằng lệnh `dbStats`, chuyển đổi kích thước dữ liệu sang GB và so sánh với `threshold_gb`. Ghi log cảnh báo nếu vượt ngưỡng. Thử kết nối lại khi có lỗi.
+- **Ví dụ**:
+  ```python
+  from db_config import MongoDBConnection
+  conn = MongoDBConnection()
+  is_size_ok = conn.check_database_size(threshold_gb=500)
+  print(is_size_ok)  # True nếu kích thước < 500GB, False nếu ngược lại
+  ```
+
+### 5. `get_database()`
+- **Nhiệm vụ**: Trả về đối tượng cơ sở dữ liệu MongoDB sau khi đảm bảo kiểm tra kết nối và kích thước.
+- **Đầu vào**: Không có.
+- **Đầu ra**: Đối tượng cơ sở dữ liệu MongoDB (`pymongo.database.Database`).
+- **Tham số**: Không có.
+- **Kiểu dữ liệu**: Trả về `pymongo.database.Database`.
+- **Mô tả**: Tạo một phiên bản `MongoDBConnection`, gọi `check_and_reconnect` và `check_database_size`, sau đó trả về đối tượng cơ sở dữ liệu (`self.db`).
+- **Ví dụ**:
+  ```python
+  from db_config import get_database
+  db = get_database()
+  print(db.name)  # In ra: MyProject
+  print(db.list_collection_names())  # Liệt kê các collection trong cơ sở dữ liệu
+  ```
+
+## Lưu Ý Khi Sử Dụng
+- Đảm bảo URI MongoDB (`_uri`) trong `MongoDBConnection` là chính xác và có thể truy cập.
+- Cấu hình ghi log sẽ ghi vào cả file (`mongodb_connection.log`) và console.
+- Mẫu singleton đảm bảo sử dụng tài nguyên hiệu quả bằng cách tái sử dụng cùng một kết nối.
+- Sử dụng `get_database()` để truy cập cơ sở dữ liệu trong các module khác để đảm bảo quản lý kết nối nhất quán.
+- Theo dõi file log để phát hiện các vấn đề về kết nối hoặc cảnh báo kích thước.
+
+## Ví Dụ Quy Trình Sử Dụng
+```python
+from db_config import get_database
+
+# Lấy đối tượng cơ sở dữ liệu
+db = get_database()
+
+# Thực hiện các thao tác
+collections = db.list_collection_names()
+print(f"Các collection trong {db.name}: {collections}")
+
+# Thêm một tài liệu mẫu
+db.test_collection.insert_one({"name": "Test", "value": 42})
+print("Đã thêm tài liệu vào test_collection")
+```

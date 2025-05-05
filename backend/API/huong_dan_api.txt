@@ -1,0 +1,381 @@
+# Hướng Dẫn Sử Dụng api.py
+
+## Tổng Quan
+File `api.py` định nghĩa một API RESTful sử dụng FastAPI để quản lý dữ liệu bệnh nhân và lịch sử y tế. API hỗ trợ các chức năng như đăng ký, đăng nhập, quản lý thông tin bệnh nhân (tạo, lấy, cập nhật, xóa), và quản lý lịch sử y tế (tạo, lấy, cập nhật, xóa). API tích hợp xác thực JWT (JSON Web Token), kiểm tra chất lượng ảnh bằng `checkquailty.py`, cải thiện chất lượng ảnh bằng `solvequality.py`, xử lý dữ liệu bệnh nhân bằng `data_utils.py`, và lưu trữ dữ liệu trong Redis thông qua `db_redis.py`. File cũng bao gồm các mô hình Pydantic để xác thực dữ liệu và hệ thống ghi log để theo dõi.
+
+## Các Thành Phần Chính
+
+### 1. Cấu Hình
+- **Thư viện yêu cầu**: `fastapi`, `pyjwt`, `bcrypt`, `pydantic`, `pandas`, `numpy`, `requests`, `redis`.
+- **Biến môi trường**:
+  - `JWT_SECRET`: Khóa bí mật cho JWT (mặc định: chuỗi cố định nếu không thiết lập).
+  - `OUTPUT_DIR`: Thư mục lưu trữ file Excel tham chiếu (mặc định: `/tmp/patient_data`).
+- **Cấu hình JWT**:
+  - `ALGORITHM`: `HS256`.
+  - `ACCESS_TOKEN_EXPIRE_MINUTES`: 30 phút.
+- **Redis**: Sử dụng `RedisCache` từ `db_redis.py` để lưu trữ và truy xuất dữ liệu.
+- **Xử lý lỗi**: Tùy chỉnh xử lý lỗi xác thực (`RequestValidationError`) để trả về thông báo rõ ràng, đặc biệt cho định dạng `birthdate`.
+
+### 2. Mô Hình Pydantic
+- **`PatientCreate`**: Định nghĩa dữ liệu để tạo bệnh nhân mới.
+  - **Thuộc tính**:
+    - `name`: Tên (tùy chọn, `str`).
+    - `birthdate`: Ngày sinh, định dạng `dd/mm/yyyy` (tùy chọn, `str`).
+    - `gender`: Giới tính (tùy chọn, `str`).
+    - `role`: Vai trò (tùy chọn, `str`).
+    - `work`: Công việc (tùy chọn, `str`).
+    - `username`: Tên người dùng (bắt buộc, `str`).
+    - `email`: Email (tùy chọn, `str`).
+    - `password`: Mật khẩu (bắt buộc, `str`).
+  - **Xác thực**: Kiểm tra định dạng `birthdate` bằng `@validator`.
+- **`PatientUpdate`**: Định nghĩa dữ liệu để cập nhật bệnh nhân.
+  - **Thuộc tính**: Tương tự `PatientCreate`, nhưng tất cả đều tùy chọn và `birthdate` sử dụng regex.
+  - **Xác thực**: Kiểm tra định dạng `birthdate`.
+- **`ImageCreate`**: Định nghĩa dữ liệu để tạo lịch sử y tế.
+  - **Thuộc tính**:
+    - `image_id`: ID ảnh (bắt buộc, `str`).
+    - `image`: Đường dẫn hoặc URL ảnh (bắt buộc, `str`).
+    - `diagnosis_score`: Điểm chẩn đoán (bắt buộc, `float`).
+    - `comment`: Bình luận (tùy chọn, `str`).
+  - **Xác thực**: Kiểm tra ảnh bằng `load_image` từ `checkquailty.py`.
+- **`ImageUpdate`**: Định nghĩa dữ liệu để cập nhật lịch sử y tế.
+  - **Thuộc tính**: Tương tự `ImageCreate`, nhưng tất cả đều tùy chọn.
+  - **Xác thực**: Kiểm tra ảnh nếu có.
+
+### 3. Các Endpoint
+
+#### 3.1. `POST /register`
+- **Nhiệm vụ**: Đăng ký tài khoản bệnh nhân mới.
+- **Đầu vào**:
+  - Body: Đối tượng `PatientCreate` (JSON).
+- **Đầu ra**: Từ điển chứa thông báo và tên người dùng (`Dict`).
+- **Tham số**: Không có tham số đường dẫn.
+- **Kiểu dữ liệu**:
+  - Đầu vào: JSON tương ứng với `PatientCreate`.
+  - Đầu ra: `Dict` (ví dụ: `{"message": "User registered", "username": "testuser"}`).
+- **Mô tả**: Điền giá trị thiếu bằng `fill_missing_data`, mã hóa mật khẩu bằng `hash_password`, tạo `user_id` duy nhất, lưu vào Redis bằng `RedisCache.create_patient`. Trả về thông báo thành công hoặc lỗi (400 nếu xác thực thất bại, 500 nếu lỗi server).
+- **Ví dụ**:
+  ```bash
+  curl -X POST "http://localhost:8000/register" \
+  -H "Content-Type: application/json" \
+  -d '{
+      "username": "testuser",
+      "password": "testpassword",
+      "name": "Nguyễn Văn A",
+      "birthdate": "01/01/1990",
+      "gender": "male",
+      "role": "patient",
+      "work": "Engineer",
+      "email": "test@example.com"
+  }'
+  ```
+  **Kết quả**:
+  ```json
+  {"message": "User registered", "username": "testuser"}
+  ```
+
+#### 3.2. `POST /login`
+- **Nhiệm vụ**: Đăng nhập và trả về token JWT.
+- **Đầu vào**:
+  - Body: Dữ liệu form (`OAuth2PasswordRequestForm`) với `username` và `password`.
+- **Đầu ra**: Từ điển chứa token và loại token (`Dict`).
+- **Tham số**: Không có tham số đường dẫn.
+- **Kiểu dữ liệu**:
+  - Đầu vào: Form data với `username` (`str`), `password` (`str`).
+  - Đầu ra: `Dict` (ví dụ: `{"access_token": "<token>", "token_type": "bearer"}`).
+- **Mô tả**: Xác minh thông tin đăng nhập bằng `verify_password` và dữ liệu từ `RedisCache.get_cached_user`. Nếu hợp lệ, tạo token JWT với thời hạn 30 phút. Trả về lỗi 401 nếu thông tin sai, 500 nếu lỗi server.
+- **Ví dụ**:
+  ```bash
+  curl -X POST "http://localhost:8000/login" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=testuser&password=testpassword"
+  ```
+  **Kết quả**:
+  ```json
+  {"access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...", "token_type": "bearer"}
+  ```
+
+#### 3.3. `POST /patients`
+- **Nhiệm vụ**: Tạo bệnh nhân mới (yêu cầu xác thực).
+- **Đầu vào**:
+  - Body: Đối tượng `PatientCreate` (JSON).
+  - Header: `Authorization: Bearer <token>`.
+- **Đầu ra**: Từ điển chứa thông tin bệnh nhân và báo cáo ngoại lệ (`Dict`).
+- **Tham số**: Không có tham số đường dẫn.
+- **Kiểu dữ liệu**:
+  - Đầu vào: JSON tương ứng với `PatientCreate`, token JWT.
+  - Đầu ra: `Dict` (bao gồm thông tin bệnh nhân và `outlier_report`).
+- **Mô tả**: Xác thực người dùng bằng `get_current_user`. Điền giá trị thiếu, mã hóa mật khẩu, tạo `user_id`, lưu vào Redis. Tạo báo cáo ngoại lệ bằng `aggregate_and_visualize`. Trả về lỗi 400, 401, hoặc 500 tùy trường hợp.
+- **Ví dụ**:
+  ```bash
+  curl -X POST "http://localhost:8000/patients" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+      "username": "newuser",
+      "password": "newpassword",
+      "name": "Trần Thị B"
+  }'
+  ```
+  **Kết quả**:
+  ```json
+  {
+      "username": "newuser",
+      "name": "Trần Thị B",
+      "user_id": "USR1698765432",
+      "outlier_report": {...}
+  }
+  ```
+
+#### 3.4. `GET /patients/{user_id}`
+- **Nhiệm vụ**: Lấy thông tin bệnh nhân theo `user_id`.
+- **Đầu vào**:
+  - Đường dẫn: `user_id` (`str`).
+  - Header: `Authorization: Bearer <token>`.
+- **Đầu ra**: Từ điển chứa thông tin bệnh nhân (`Dict`).
+- **Tham số**:
+  - `user_id`: `str`, ID của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), token JWT.
+  - Đầu ra: `Dict` (thông tin bệnh nhân).
+- **Mô tả**: Xác thực người dùng. Chỉ admin hoặc chính bệnh nhân được truy cập. Lấy dữ liệu từ Redis bằng `get_patient_by_id`. Trả về lỗi 403, 404, hoặc 500.
+- **Ví dụ**:
+  ```bash
+  curl -X GET "http://localhost:8000/patients/USR1698765432" \
+  -H "Authorization: Bearer <token>"
+  ```
+  **Kết quả**:
+  ```json
+  {
+      "user_id": "USR1698765432",
+      "username": "newuser",
+      "name": "Trần Thị B",
+      ...
+  }
+  ```
+
+#### 3.5. `PUT /patients/{user_id}`
+- **Nhiệm vụ**: Cập nhật thông tin bệnh nhân.
+- **Đầu vào**:
+  - Đường dẫn: `user_id` (`str`).
+  - Body: Đối tượng `PatientUpdate` (JSON).
+  - Header: `Authorization: Bearer <token>`.
+- **Đầu ra**: Từ điển chứa thông tin bệnh nhân đã cập nhật và báo cáo ngoại lệ (`Dict`).
+- **Tham số**:
+  - `user_id`: `str`, ID của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), JSON tương ứng với `PatientUpdate`, token JWT.
+  - Đầu ra: `Dict` (bao gồm thông tin cập nhật và `outlier_report`).
+- **Mô tả**: Xác thực quyền truy cập. Điền giá trị thiếu, cập nhật dữ liệu trong Redis bằng `update_patient`. Tạo báo cáo ngoại lệ. Trả về lỗi 400, 403, 404, hoặc 500.
+- **Ví dụ**:
+  ```bash
+  curl -X PUT "http://localhost:8000/patients/USR1698765432" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Trần Thị B Updated"}'
+  ```
+  **Kết quả**:
+  ```json
+  {
+      "name": "Trần Thị B Updated",
+      "outlier_report": {...}
+  }
+  ```
+
+#### 3.6. `DELETE /patients/{user_id}`
+- **Nhiệm vụ**: Xóa bệnh nhân.
+- **Đầu vào**:
+  - Đường dẫn: `user_id` (`str`).
+  - Header: `Authorization: Bearer <token>`.
+- **Đầu ra**: Từ điển chứa thông báo xóa (`Dict`).
+- **Tham số**:
+  - `user_id`: `str`, ID của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), token JWT.
+  - Đầu ra: `Dict` (ví dụ: `{"message": "Patient deleted"}`).
+- **Mô tả**: Chỉ admin được phép xóa. Xóa dữ liệu bằng `delete_patient`. Trả về lỗi 403, 404, hoặc 500.
+- **Ví dụ**:
+  ```bash
+  curl -X DELETE "http://localhost:8000/patients/USR1698765432" \
+  -H "Authorization: Bearer <token>"
+  ```
+  **Kết quả**:
+  ```json
+  {"message": "Patient deleted"}
+  ```
+
+#### 3.7. `POST /patients/{user_id}/history`
+- **Nhiệm vụ**: Tạo lịch sử y tế cho bệnh nhân.
+- **Đầu vào**:
+  - Đường dẫn: `user_id` (`str`).
+  - Body: Đối tượng `ImageCreate` (JSON).
+  - Header: `Authorization: Bearer <token>`.
+- **Đầu ra**: Từ điển chứa thông tin lịch sử y tế (`Dict`).
+- **Tham số**:
+  - `user_id`: `str`, ID của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), JSON tương ứng với `ImageCreate`, token JWT.
+  - Đầu ra: `Dict` (bao gồm `image_id`, `image`, `quality_report`, `date`, ...).
+- **Mô tả**: Xác thực quyền truy cập. Kiểm tra chất lượng ảnh bằng `process_multiple_images`. Nếu không đạt tiêu chuẩn, cải thiện bằng `enhance_image` và kiểm tra lại. Lưu dữ liệu vào Redis với `create_medical_history`. Thêm ngày tạo (`date`) dưới dạng ISO string. Trả về lỗi 400, 403, hoặc 500.
+- **Ví dụ**:
+  ```bash
+  curl -X POST "http://localhost:8000/patients/USR1698765432/history" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+      "image_id": "img123",
+      "image": "dog1.webp",
+      "diagnosis_score": 0.85,
+      "comment": "Test history"
+  }'
+  ```
+  **Kết quả**:
+  ```json
+  {
+      "image_id": "img123",
+      "image": "dog1.webp",
+      "diagnosis_score": 0.85,
+      "quality_report": {...},
+      "date": ["2025-05-04T12:00:00Z"]
+  }
+  ```
+
+#### 3.8. `GET /patients/{user_id}/history`
+- **Nhiệm vụ**: Lấy lịch sử y tế của bệnh nhân.
+- **Đầu vào**:
+  - Đường dẫn: `user_id` (`str`).
+  - Header: `Authorization: Bearer <token>`.
+- **Đầu ra**: Từ điển chứa lịch sử y tế (`Dict`).
+- **Tham số**:
+  - `user_id`: `str`, ID của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), token JWT.
+  - Đầu ra: `Dict` (bao gồm `image_id`, `image`, `date`, ...).
+- **Mô tả**: Xác thực quyền truy cập. Lấy dữ liệu từ Redis bằng `get_medical_history`. Trả về lỗi 403, 404, hoặc 500.
+- **Ví dụ**:
+  ```bash
+  curl -X GET "http://localhost:8000/patients/USR1698765432/history" \
+  -H "Authorization: Bearer <token>"
+  ```
+  **Kết quả**:
+  ```json
+  {
+      "image_id": "img123",
+      "image": "dog1.webp",
+      "diagnosis_score": 0.85,
+      "date": ["2025-05-04T12:00:00Z"]
+  }
+  ```
+
+#### 3.9. `PUT /patients/{user_id}/history`
+- **Nhiệm vụ**: Cập nhật lịch sử y tế.
+- **Đầu vào**:
+  - Đường dẫn: `user_id` (`str`).
+  - Body: Đối tượng `ImageUpdate` (JSON).
+  - Header: `Authorization: Bearer <token>`.
+- **Đầu ra**: Từ điển chứa lịch sử y tế đã cập nhật (`Dict`).
+- **Tham số**:
+  - `user_id`: `str`, ID của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), JSON tương ứng với `ImageUpdate`, token JWT.
+  - Đầu ra: `Dict` (bao gồm thông tin cập nhật và `date`).
+- **Mô tả**: Xác thực quyền truy cập. Nếu cập nhật ảnh, kiểm tra và cải thiện chất lượng. Lưu giữ lịch sử ngày (`date`) và thêm ngày mới. Cập nhật bằng `update_medical_history`. Trả về lỗi 400, 403, 404, hoặc 500.
+- **Ví dụ**:
+  ```bash
+  curl -X PUT "http://localhost:8000/patients/USR1698765432/history" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"diagnosis_score": 0.9}'
+  ```
+  **Kết quả**:
+  ```json
+  {
+      "image_id": "img123",
+      "diagnosis_score": 0.9,
+      "date": ["2025-05-04T12:00:00Z", "2025-05-04T12:01:00Z"]
+  }
+  ```
+
+#### 3.10. `DELETE /patients/{user_id}/history`
+- **Nhiệm vụ**: Xóa lịch sử y tế.
+- **Đầu vào**:
+  - Đường dẫn: `user_id` (`str`).
+  - Header: `Authorization: Bearer <token>`.
+- **Đầu ra**: Từ điển chứa thông báo xóa (`Dict`).
+- **Tham số**:
+  - `user_id`: `str`, ID của bệnh nhân.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), token JWT.
+  - Đầu ra: `Dict` (ví dụ: `{"message": "Medical history deleted"}`).
+- **Mô tả**: Chỉ admin được phép xóa. Xóa bằng `delete_medical_history`. Trả về lỗi 403, 404, hoặc 500.
+- **Ví dụ**:
+  ```bash
+  curl -X DELETE "http://localhost:8000/patients/USR1698765432/history" \
+  -H "Authorization: Bearer <token>"
+  ```
+  **Kết quả**:
+  ```json
+  {"message": "Medical history deleted"}
+  ```
+
+### 4. Hàm Hỗ Trợ
+- **`get_current_user(token: str) -> Dict`**:
+  - **Nhiệm vụ**: Xác thực token JWT và trả về thông tin người dùng.
+  - **Đầu vào**: `token` (`str`, từ `OAuth2PasswordBearer`).
+  - **Đầu ra**: `Dict` (thông tin người dùng từ Redis).
+  - **Mô tả**: Giải mã token, lấy `username`, truy xuất người dùng từ Redis. Ném lỗi 401 nếu token không hợp lệ hoặc người dùng không tồn tại.
+  - **Ví dụ**:
+    ```python
+    from fastapi import Depends
+    from api import get_current_user
+    user = get_current_user(token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...")
+    print(user)  # {"username": "testuser", ...}
+    ```
+
+### 5. Test Cases
+- File bao gồm đoạn mã kiểm thử sử dụng `TestClient` để kiểm tra 13 trường hợp:
+  1. Đăng ký tài khoản mới.
+  2. Đăng ký với email không hợp lệ.
+  3. Đăng nhập thành công.
+  4. Đăng nhập với thông tin sai.
+  5. Tạo bệnh nhân mới.
+  6. Tạo bệnh nhân với `birthdate` không hợp lệ.
+  7. Lấy thông tin bệnh nhân.
+  8. Cập nhật thông tin bệnh nhân.
+  9. Tạo lịch sử y tế.
+  10. Lấy lịch sử y tế.
+  11. Cập nhật lịch sử y tế.
+  12. Xóa lịch sử y tế (admin).
+  13. Xóa bệnh nhân (admin).
+- **Chạy kiểm thử**:
+  ```bash
+  python api.py
+  ```
+  Đảm bảo Redis đang chạy và các thư viện cần thiết được cài đặt.
+
+## Lưu Ý Khi Sử Dụng
+- **Redis**: Đảm bảo Redis chạy và cấu hình đúng để lưu trữ dữ liệu.
+- **JWT_SECRET**: Thiết lập biến môi trường `JWT_SECRET` để bảo mật token.
+- **Xác thực ảnh**: Các endpoint liên quan đến ảnh yêu cầu ảnh hợp lệ (URL hoặc đường dẫn cục bộ). Đảm bảo quyền truy cập file hoặc kết nối mạng.
+- **Định dạng ngày**: `birthdate` phải có định dạng `dd/mm/yyyy`.
+- **Quyền truy cập**: Một số endpoint yêu cầu vai trò `admin`. Đảm bảo người dùng có quyền phù hợp.
+- **Ghi log**: Theo dõi log để phát hiện lỗi xác thực, tải ảnh, hoặc Redis.
+
+## Ví Dụ Quy Trình Sử Dụng
+```bash
+# Đăng ký người dùng
+curl -X POST "http://localhost:8000/register" \
+-H "Content-Type: application/json" \
+-d '{"username": "testuser", "password": "testpassword", "name": "Nguyễn Văn A"}'
+
+# Đăng nhập
+curl -X POST "http://localhost:8000/login" \
+-H "Content-Type: application/x-www-form-urlencoded" \
+-d "username=testuser&password=testpassword"
+
+# Tạo lịch sử y tế
+curl -X POST "http://localhost:8000/patients/USR1698765432/history" \
+-H "Authorization: Bearer <token>" \
+-H "Content-Type: application/json" \
+-d '{"image_id": "img123", "image": "dog1.webp", "diagnosis_score": 0.85}'
+```

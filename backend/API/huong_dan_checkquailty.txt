@@ -1,0 +1,206 @@
+# Hướng Dẫn Sử Dụng checkquailty.py
+
+## Tổng Quan
+File `checkquailty.py` cung cấp các hàm để đánh giá chất lượng ảnh dựa trên các tiêu chuẩn như độ phân giải, độ sắc nét, nhiễu, độ tương phản, độ sáng, và cân bằng màu. File sử dụng OpenCV (`cv2`) để xử lý ảnh, `pandas` để lưu kết quả, và `requests` để tải ảnh từ URL. Các hàm hỗ trợ xử lý song song để tăng hiệu suất, và file bao gồm hàm tổng hợp để xử lý nhiều ảnh cùng lúc (`process_multiple_images`) và hàm in đánh giá chi tiết (`print_detailed_assessment`).
+
+## Các Hàm
+
+### 1. `load_image(image_input)`
+- **Nhiệm vụ**: Tải ảnh từ đường dẫn cục bộ hoặc URL.
+- **Đầu vào**:
+  - `image_input`: Đường dẫn file hoặc URL của ảnh (`str`).
+- **Đầu ra**: Ảnh màu (định dạng BGR, `numpy.ndarray`) hoặc `None` nếu thất bại.
+- **Tham số**:
+  - `image_input`: `str`, đường dẫn hoặc URL của ảnh.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image_input` (`str`).
+  - Đầu ra: `numpy.ndarray` (dtype=`uint8`, định dạng BGR) hoặc `None`.
+- **Mô tả**: Nếu `image_input` là URL, tải ảnh bằng `requests` và giải mã bằng `cv2.imdecode`. Nếu là đường dẫn cục bộ, đọc bằng `cv2.imread`. Trả về `None` và in lỗi nếu tải thất bại.
+- **Ví dụ**:
+  ```python
+  from checkquailty import load_image
+  image = load_image("dog1.webp")
+  print("Ảnh đã tải" if image is not None else "Tải ảnh thất bại")
+  ```
+
+### 2. `cal_brightness_contrast(image)`
+- **Nhiệm vụ**: Tính độ sáng và độ tương phản của ảnh.
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Từ điển chứa độ sáng (`brightness`) và độ tương phản (`contrast`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `Dict` (với khóa `brightness` và `contrast`, giá trị `float`).
+- **Mô tả**: Chuyển ảnh sang grayscale, tính độ sáng bằng trung bình pixel (`np.mean`) và độ tương phản bằng độ lệch chuẩn (`np.std`).
+- **Ví dụ**:
+  ```python
+  import cv2
+  from checkquailty import cal_brightness_contrast
+  image = cv2.imread("dog1.webp")
+  result = cal_brightness_contrast(image)
+  print(result)  # In ra: {'brightness': <giá trị>, 'contrast': <giá trị>}
+  ```
+
+### 3. `cal_resolution(image)`
+- **Nhiệm vụ**: Tính độ phân giải của ảnh (chiều rộng và chiều cao).
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Từ điển chứa chiều rộng (`width`) và chiều cao (`height`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `Dict` (với khóa `width` và `height`, giá trị `int`).
+- **Mô tả**: Lấy chiều rộng và chiều cao từ kích thước ảnh (`image.shape[:2]`).
+- **Ví dụ**:
+  ```python
+  import cv2
+  from checkquailty import cal_resolution
+  image = cv2.imread("dog1.webp")
+  result = cal_resolution(image)
+  print(result)  # In ra: {'width': <giá trị>, 'height': <giá trị>}
+  ```
+
+### 4. `cal_blurry(image)`
+- **Nhiệm vụ**: Tính độ sắc nét của ảnh dựa trên phương sai của Laplacian.
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Từ điển chứa độ sắc nét (`sharpness`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `Dict` (với khóa `sharpness`, giá trị `float`).
+- **Mô tả**: Chuyển ảnh sang grayscale, áp dụng toán tử Laplacian (`cv2.Laplacian`), và tính phương sai (`var`) để đo độ sắc nét.
+- **Ví dụ**:
+  ```python
+  import cv2
+  from checkquailty import cal_blurry
+  image = cv2.imread("dog1.webp")
+  result = cal_blurry(image)
+  print(result)  # In ra: {'sharpness': <giá trị>}
+  ```
+
+### 5. `cal_noise(image)`
+- **Nhiệm vụ**: Tính mức độ nhiễu của ảnh dựa trên độ lệch chuẩn của Laplacian.
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Từ điển chứa mức độ nhiễu (`noise`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `Dict` (với khóa `noise`, giá trị `float`).
+- **Mô tả**: Chuyển ảnh sang grayscale, áp dụng toán tử Laplacian, và tính độ lệch chuẩn (`std`) để đo nhiễu.
+- **Ví dụ**:
+  ```python
+  import cv2
+  from checkquailty import cal_noise
+  image = cv2.imread("dog1.webp")
+  result = cal_noise(image)
+  print(result)  # In ra: {'noise': <giá trị>}
+  ```
+
+### 6. `cal_color_balance(image)`
+- **Nhiệm vụ**: Tính độ chênh lệch màu giữa các kênh Blue, Green, Red.
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Từ điển chứa độ chênh lệch màu (`color_diff`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `Dict` (với khóa `color_diff`, giá trị `float`).
+- **Mô tả**: Tách ảnh thành các kênh Blue, Green, Red, tính độ lệch chuẩn của từng kênh, và lấy giá trị lớn nhất của các chênh lệch giữa chúng.
+- **Ví dụ**:
+  ```python
+  import cv2
+  from checkquailty import cal_color_balance
+  image = cv2.imread("dog1.webp")
+  result = cal_color_balance(image)
+  print(result)  # In ra: {'color_diff': <giá trị>}
+  ```
+
+### 7. `evaluate_image_parallel(image)`
+- **Nhiệm vụ**: Đánh giá chất lượng ảnh song song dựa trên các tiêu chuẩn (độ sáng, độ tương phản, độ phân giải, độ sắc nét, nhiễu, cân bằng màu).
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Ma trận numpy chứa giá trị đo được và độ lệch so với tiêu chuẩn, hoặc `None` nếu có lỗi.
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `numpy.ndarray` (2x7, dtype=`float64`) hoặc `None`.
+- **Mô tả**: Sử dụng `ThreadPoolExecutor` để chạy song song các hàm `cal_brightness_contrast`, `cal_resolution`, `cal_blurry`, `cal_noise`, và `cal_color_balance`. Tính độ lệch so với các tiêu chuẩn (độ sáng: 20-235, độ tương phản: ≥15, độ phân giải: >150x150, độ sắc nét: ≥50, nhiễu: ≤30, chênh lệch màu: ≤60). Trả về ma trận với hai hàng: giá trị đo được và độ lệch.
+- **Ví dụ**:
+  ```python
+  import cv2
+  from checkquailty import evaluate_image_parallel
+  image = cv2.imread("dog1.webp")
+  result = evaluate_image_parallel(image)
+  print(result)  # In ra ma trận 2x7
+  ```
+
+### 8. `process_multiple_images(image_paths)`
+- **Nhiệm vụ**: Đánh giá chất lượng nhiều ảnh và trả về kết quả dưới dạng DataFrame.
+- **Đầu vào**:
+  - `image_paths`: Danh sách các đường dẫn hoặc URL của ảnh (`List[str]`).
+- **Đầu ra**: Từ điển với khóa là đường dẫn ảnh và giá trị là DataFrame chứa kết quả đánh giá.
+- **Tham số**:
+  - `image_paths`: `List[str]`, danh sách đường dẫn hoặc URL.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image_paths` (`List[str]`).
+  - Đầu ra: `Dict` (khóa: `str`, giá trị: `pandas.DataFrame`).
+- **Mô tả**: Tải tất cả ảnh bằng `load_image`, lọc các ảnh hợp lệ, và sử dụng `ThreadPoolExecutor` (tối đa 8 worker) để chạy `evaluate_image_parallel` cho từng ảnh. Tạo DataFrame cho mỗi ảnh với các cột `Brightness`, `Contrast`, `Width`, `Height`, `Sharpness`, `Noise`, `Color_Diff` và hai hàng `Measured`, `Deviation`.
+- **Ví dụ**:
+  ```python
+  from checkquailty import process_multiple_images
+  image_paths = ["dog1.webp", "dog2.webp"]
+  results = process_multiple_images(image_paths)
+  for path, df in results.items():
+      print(f"Kết quả cho {path}:\n{df}")
+  ```
+
+### 9. `print_detailed_assessment(df)`
+- **Nhiệm vụ**: In đánh giá chi tiết về chất lượng ảnh dựa trên DataFrame kết quả.
+- **Đầu vào**:
+  - `df`: DataFrame chứa kết quả đánh giá (từ `evaluate_image_parallel`).
+- **Đầu ra**: Không có (in kết quả ra console).
+- **Tham số**:
+  - `df`: `pandas.DataFrame`, chứa hai hàng `Measured` và `Deviation`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `df` (`pandas.DataFrame`).
+  - Đầu ra: Không có.
+- **Mô tả**: Kiểm tra độ lệch (`Deviation`) để xác định xem mỗi tiêu chí (`Brightness`, `Contrast`, `Resolution`, `Sharpness`, `Noise`, `Color Balance`) đạt hay không đạt, sau đó in kết quả chi tiết.
+- **Ví dụ**:
+  ```python
+  from checkquailty import process_multiple_images, print_detailed_assessment
+  results = process_multiple_images(["dog1.webp"])
+  for path, df in results.items():
+      print(f"Đánh giá cho {path}:")
+      print_detailed_assessment(df)
+  ```
+
+## Lưu Ý Khi Sử Dụng
+- **Thư viện yêu cầu**: Cần cài đặt `numpy`, `pandas`, `opencv-python`, và `requests`.
+- **Tiêu chuẩn chất lượng**: Các tiêu chuẩn (độ sáng, độ tương phản, v.v.) được định nghĩa cố định. Có thể cần điều chỉnh cho các ứng dụng cụ thể.
+- **Xử lý song song**: Hàm `process_multiple_images` sử dụng tối đa 8 worker để tối ưu hiệu suất. Điều chỉnh nếu cần.
+- **Tải ảnh từ URL**: Đảm bảo kết nối mạng ổn định khi tải ảnh từ URL, và xử lý thời gian chờ (`timeout=10`).
+- **Ghi lỗi**: Theo dõi console để phát hiện lỗi tải ảnh hoặc xử lý.
+
+## Ví Dụ Quy Trình Sử Dụng
+```python
+from checkquailty import process_multiple_images, print_detailed_assessment
+
+# Đánh giá nhiều ảnh
+image_paths = ["dog1.webp", "dog2.webp"]
+results = process_multiple_images(image_paths)
+
+# In kết quả
+for path, df in results.items():
+    print(f"\nKết quả cho {path}:")
+    print(df)
+    print_detailed_assessment(df)
+```

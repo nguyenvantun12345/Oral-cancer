@@ -1,0 +1,204 @@
+# Hướng Dẫn Sử Dụng solvequality.py
+
+## Tổng Quan
+File `solvequality.py` cung cấp các hàm để cải thiện chất lượng ảnh sử dụng thư viện OpenCV (`cv2`). Các hàm xử lý các vấn đề như độ tương phản, độ sắc nét, nhiễu, cân bằng màu, độ sáng, và kích thước ảnh. File bao gồm một hàm tổng hợp (`enhance_image`) để áp dụng tất cả các cải tiến theo trình tự và một hàm để xử lý và lưu ảnh (`process_and_save`). File sử dụng các kỹ thuật như CLAHE, Unsharp Mask, Bilateral Filter, và điều chỉnh màu sắc để tối ưu hóa chất lượng ảnh.
+
+## Các Hàm
+
+### 1. `solve_contrast(image)`
+- **Nhiệm vụ**: Cải thiện độ tương phản của ảnh bằng kỹ thuật CLAHE (Contrast Limited Adaptive Histogram Equalization).
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Ảnh đã được cải thiện độ tương phản (`numpy.ndarray`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `numpy.ndarray` (dtype=`uint8`, định dạng BGR).
+- **Mô tả**: Tách ảnh thành các kênh màu (Blue, Green, Red), áp dụng CLAHE với `clipLimit=1.0` và `tileGridSize=(8, 8)` cho từng kênh, sau đó gộp lại thành ảnh màu. CLAHE giúp tăng cường độ tương phản cục bộ mà không làm mất chi tiết.
+- **Ví dụ**:
+  ```python
+  import cv2
+  from solvequality import solve_contrast
+  image = cv2.imread("dog1.webp")
+  enhanced = solve_contrast(image)
+  cv2.imwrite("contrast_dog1.webp", enhanced)
+  print("Đã cải thiện độ tương phản")
+  ```
+
+### 2. `solve_blur(image)`
+- **Nhiệm vụ**: Tăng độ sắc nét của ảnh bằng kỹ thuật Unsharp Mask.
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Ảnh đã được tăng độ sắc nét (`numpy.ndarray`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `numpy.ndarray` (dtype=`uint8`, định dạng BGR).
+- **Mô tả**: Chuyển ảnh sang định dạng RGB, chuẩn hóa về khoảng [0,1], áp dụng Gaussian Blur (kích thước kernel 9x9, sigma=10.0), sau đó sử dụng `cv2.addWeighted` với trọng số 1.5 và -0.5 để tạo hiệu ứng sắc nét. Chuyển kết quả về khoảng [0,255] và định dạng BGR.
+- **Ví dụ**:
+  ```python
+  import cv2
+  from solvequality import solve_blur
+  image = cv2.imread("dog1.webp")
+  sharpened = solve_blur(image)
+  cv2.imwrite("sharp_dog1.webp", sharpened)
+  print("Đã tăng độ sắc nét")
+  ```
+
+### 3. `solve_noise(image)`
+- **Nhiệm vụ**: Giảm nhiễu trong ảnh bằng Bilateral Filter.
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Ảnh đã được giảm nhiễu (`numpy.ndarray`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `numpy.ndarray` (dtype=`uint8`, định dạng BGR).
+- **Mô tả**: Áp dụng Bilateral Filter với đường kính pixel lân cận (`d=9`), `sigmaColor=75`, và `sigmaSpace=75`. Bộ lọc này giảm nhiễu hiệu quả trong khi vẫn bảo toàn các cạnh.
+- **Ví dụ**:
+  ```python
+  import cv2
+  from solvequality import solve_noise
+  image = cv2.imread("dog1.webp")
+  denoised = solve_noise(image)
+  cv2.imwrite("denoised_dog1.webp", denoised)
+  print("Đã giảm nhiễu")
+  ```
+
+### 4. `solve_balance(image)`
+- **Nhiệm vụ**: Cân bằng màu sắc của ảnh bằng cách điều chỉnh các kênh màu dựa trên giá trị trung bình.
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Ảnh đã được cân bằng màu (`numpy.ndarray`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `numpy.ndarray` (dtype=`uint8`, định dạng BGR).
+- **Mô tả**: Tách ảnh thành các kênh Blue, Green, Red, tính giá trị trung bình của từng kênh và trung bình tổng của ba kênh. Điều chỉnh mỗi kênh bằng hệ số tỷ lệ (`avg/avg_channel`) để cân bằng màu, sau đó gộp lại thành ảnh.
+- **Ví dụ**:
+  ```python
+  import cv2
+  from solvequality import solve_balance
+  image = cv2.imread("dog1.webp")
+  balanced = solve_balance(image)
+  cv2.imwrite("balanced_dog1.webp", balanced)
+  print("Đã cân bằng màu sắc")
+  ```
+
+### 5. `resize_image(image, target_width=256, target_height=256)`
+- **Nhiệm vụ**: Thay đổi kích thước ảnh để đạt kích thước tối thiểu mong muốn mà vẫn giữ tỷ lệ khung hình.
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+  - `target_width`: Chiều rộng tối thiểu mong muốn (mặc định: 256).
+  - `target_height`: Chiều cao tối thiểu mong muốn (mặc định: 256).
+- **Đầu ra**: Ảnh đã được thay đổi kích thước (`numpy.ndarray`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+  - `target_width`: `int`, chiều rộng mục tiêu.
+  - `target_height`: `int`, chiều cao mục tiêu.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR), `target_width` (`int`), `target_height` (`int`).
+  - Đầu ra: `numpy.ndarray` (dtype=`uint8`, định dạng BGR).
+- **Mô tả**: Kiểm tra kích thước ảnh, nếu nhỏ hơn mục tiêu, tính tỷ lệ phóng đại để đạt kích thước tối thiểu mà giữ tỷ lệ khung hình, sau đó sử dụng `cv2.resize` với phép nội suy `INTER_CUBIC`.
+- **Ví dụ**:
+  ```python
+  import cv2
+  from solvequality import resize_image
+  image = cv2.imread("dog1.webp")
+  resized = resize_image(image, target_width=512, target_height=512)
+  cv2.imwrite("resized_dog1.webp", resized)
+  print("Đã thay đổi kích thước ảnh")
+  ```
+
+### 6. `solve_brightness(image, target_brightness=127)`
+- **Nhiệm vụ**: Điều chỉnh độ sáng của ảnh để đạt mức độ sáng mong muốn.
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+  - `target_brightness`: Độ sáng mục tiêu (mặc định: 127).
+- **Đầu ra**: Ảnh đã được điều chỉnh độ sáng (`numpy.ndarray`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+  - `target_brightness`: `float`, độ sáng mục tiêu (thang 0-255).
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR), `target_brightness` (`float`).
+  - Đầu ra: `numpy.ndarray` (dtype=`uint8`, định dạng BGR).
+- **Mô tả**: Chuyển ảnh sang grayscale để tính độ sáng trung bình, tính chênh lệch với `target_brightness`, sau đó điều chỉnh toàn bộ pixel bằng cách cộng/trừ chênh lệch, giới hạn giá trị trong [0,255].
+- **Ví dụ**:
+  ```python
+  import cv2
+  from solvequality import solve_brightness
+  image = cv2.imread("dog1.webp")
+  brightened = solve_brightness(image, target_brightness=150)
+  cv2.imwrite("bright_dog1.webp", brightened)
+  print("Đã điều chỉnh độ sáng")
+  ```
+
+### 7. `enhance_image(image)`
+- **Nhiệm vụ**: Áp dụng tất cả các cải tiến chất lượng ảnh theo trình tự: thay đổi kích thước, điều chỉnh độ sáng, giảm nhiễu, tăng độ sắc nét, cải thiện độ tương phản, và cân bằng màu.
+- **Đầu vào**:
+  - `image`: Ảnh màu (định dạng BGR, `numpy.ndarray`).
+- **Đầu ra**: Ảnh đã được cải thiện toàn diện (`numpy.ndarray`).
+- **Tham số**:
+  - `image`: `numpy.ndarray`, ảnh đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `image` (`numpy.ndarray`, dtype=`uint8`, định dạng BGR).
+  - Đầu ra: `numpy.ndarray` (dtype=`uint8`, định dạng BGR).
+- **Mô tả**: Gọi lần lượt các hàm `resize_image`, `solve_brightness`, `solve_noise`, `solve_blur`, `solve_contrast`, và `solve_balance` để cải thiện chất lượng ảnh một cách toàn diện.
+- **Ví dụ**:
+  ```python
+  import cv2
+  from solvequality import enhance_image
+  image = cv2.imread("dog1.webp")
+  enhanced = enhance_image(image)
+  cv2.imwrite("enhanced_dog1.webp", enhanced)
+  print("Đã cải thiện toàn diện chất lượng ảnh")
+  ```
+
+### 8. `process_and_save(input_path, output_path)`
+- **Nhiệm vụ**: Đọc ảnh từ đường dẫn, cải thiện chất lượng bằng `enhance_image`, và lưu kết quả.
+- **Đầu vào**:
+  - `input_path`: Đường dẫn đến ảnh đầu vào (`str`).
+  - `output_path`: Đường dẫn để lưu ảnh đã xử lý (`str`).
+- **Đầu ra**: `True` nếu xử lý và lưu thành công, `False` nếu thất bại.
+- **Tham số**:
+  - `input_path`: `str`, đường dẫn file ảnh đầu vào.
+  - `output_path`: `str`, đường dẫn file ảnh đầu ra.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `input_path` (`str`), `output_path` (`str`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Đọc ảnh bằng `cv2.imread`, kiểm tra xem ảnh có hợp lệ không, gọi `enhance_image` để cải thiện, và lưu kết quả bằng `cv2.imwrite`. In thông báo thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from solvequality import process_and_save
+  success = process_and_save("dog1.webp", "output_dog1.webp")
+  print(f"Xử lý và lưu ảnh: {success}")
+  ```
+
+## Lưu Ý Khi Sử Dụng
+- **Định dạng ảnh**: Các hàm giả định ảnh đầu vào ở định dạng BGR (mặc định của OpenCV). Đảm bảo ảnh đầu vào hợp lệ.
+- **Thư viện yêu cầu**: Cần cài đặt `opencv-python` (`cv2`) và `numpy`.
+- **Hiệu suất**: Một số hàm (như `solve_noise` với Bilateral Filter) có thể tốn tài nguyên với ảnh lớn. Xem xét tối ưu hóa kích thước ảnh trước.
+- **Tham số mặc định**: Các tham số như `target_width`, `target_height` (trong `resize_image`) hoặc `target_brightness` (trong `solve_brightness`) có thể cần điều chỉnh tùy theo ứng dụng.
+- **Thứ tự xử lý**: Hàm `enhance_image` áp dụng các cải tiến theo thứ tự cố định. Thay đổi thứ tự có thể ảnh hưởng đến kết quả.
+
+## Ví Dụ Quy Trình Sử Dụng
+```python
+import cv2
+from solvequality import process_and_save, solve_contrast, solve_blur
+
+# Xử lý toàn bộ ảnh
+success = process_and_save("dog1.webp", "enhanced_dog1.webp")
+print(f"Xử lý toàn bộ: {success}")
+
+# Xử lý riêng lẻ
+image = cv2.imread("dog1.webp")
+contrast_enhanced = solve_contrast(image)
+cv2.imwrite("contrast_dog1.webp", contrast_enhanced)
+sharpened = solve_blur(contrast_enhanced)
+cv2.imwrite("sharp_dog1.webp", sharpened)
+print("Đã xử lý độ tương phản và độ sắc nét riêng lẻ")
+```

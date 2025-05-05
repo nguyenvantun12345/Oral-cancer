@@ -1,0 +1,133 @@
+# Hướng Dẫn Sử Dụng db_schema.py
+
+## Tổng Quan
+File `db_schema.py` định nghĩa các schema (`PatientSchema` và `MedicalHistorySchema`) để xác thực dữ liệu trước khi chèn hoặc cập nhật vào cơ sở dữ liệu MongoDB. File cũng cung cấp hàm `get_collections` để lấy tham chiếu tới các collection và hàm `create_indexes` để tạo chỉ mục cho các collection `User` và `MedicalHistory`. File sử dụng `marshmallow` để xác thực và `pymongo` để tương tác với cơ sở dữ liệu.
+
+## Các Hàm và Lớp
+
+### 1. `get_collections()`
+- **Nhiệm vụ**: Lấy tham chiếu tới các collection `User` và `MedicalHistory` từ cơ sở dữ liệu.
+- **Đầu vào**: Không có.
+- **Đầu ra**: Từ điển chứa các tham chiếu collection (`User` và `MedicalHistory`).
+- **Tham số**: Không có.
+- **Kiểu dữ liệu**:
+  - Đầu ra: `dict` (với khóa `User` và `MedicalHistory`, giá trị là `pymongo.collection.Collection`).
+- **Mô tả**: Gọi `get_database` từ `db_config.py` để lấy cơ sở dữ liệu, sau đó trả về một từ điển chứa các collection.
+- **Ví dụ**:
+  ```python
+  from db_schema import get_collections
+  collections = get_collections()
+  print(collections["User"].name)  # In ra: User
+  print(collections["MedicalHistory"].name)  # In ra: MedicalHistory
+  ```
+
+### 2. Lớp `MedicalHistorySchema`
+- **Nhiệm vụ**: Định nghĩa schema để xác thực dữ liệu lịch sử y tế.
+- **Các trường**:
+  - `image_id`: `str`, mặc định là chuỗi ObjectId mới.
+  - `user_id`: `str`, bắt buộc.
+  - `image`: `str`, bắt buộc, phải là URL hợp lệ.
+  - `comment`: `str`, có thể là `None`.
+  - `date`: `List[DateTime]`, mặc định là danh sách chứa thời gian hiện tại.
+  - `diagnosis_score`: `float`, có thể là `None`, phải trong khoảng [0, 1].
+  - `quality_report`: `dict`, có thể là `None`.
+- **Mô tả**: Xác thực dữ liệu lịch sử y tế trước khi chèn hoặc cập nhật vào collection `MedicalHistory`.
+- **Ví dụ**:
+  ```python
+  from db_schema import MedicalHistorySchema
+  schema = MedicalHistorySchema()
+  data = {
+      "user_id": "patient1",
+      "image_id": "img1",
+      "image": "https://example.com/image.jpg",
+      "comment": "Quét lần đầu",
+      "diagnosis_score": 0.85
+  }
+  validated_data = schema.load(data)
+  print(validated_data)  # In ra từ điển đã xác thực
+  ```
+
+### 3. Lớp `PatientSchema`
+- **Nhiệm vụ**: Định nghĩa schema để xác thực dữ liệu bệnh nhân.
+- **Các trường**:
+  - `user_id`: `str`, mặc định là chuỗi ObjectId mới.
+  - `name`: `str`, bắt buộc, độ dài từ 1 đến 200 ký tự.
+  - `role`: `str`, bắt buộc, phải là một trong `['patient', 'doctor', 'admin']`.
+  - `email`: `str`, bắt buộc, phải là email hợp lệ.
+  - `gender`: `str`, bắt buộc, phải là một trong `['male', 'female', 'other']`.
+  - `phone`: `str`, có thể là `None`, tối đa 30 ký tự.
+  - `work`: `str`, có thể là `None`, tối đa 500 ký tự.
+  - `birthdate`: `str`, bắt buộc, định dạng `dd/mm/yyyy` (được chuyển thành `YYYY-MM-DD`).
+  - `username`: `str`, bắt buộc, độ dài từ 3 đến 60 ký tự.
+  - `password`: `str`, bắt buộc, chỉ dùng khi tải dữ liệu.
+- **Phương thức**:
+  - `parse_birthdate`: Chuyển đổi `birthdate` từ định dạng `dd/mm/yyyy` sang `YYYY-MM-DD`.
+- **Mô tả**: Xác thực dữ liệu bệnh nhân trước khi chèn hoặc cập nhật vào collection `User`.
+- **Ví dụ**:
+  ```python
+  from db_schema import PatientSchema
+  schema = PatientSchema()
+  data = {
+      "user_id": "patient1",
+      "name": "Nguyễn Văn A",
+      "role": "patient",
+      "email": "nguyenvana@example.com",
+      "gender": "male",
+      "birthdate": "01/01/1990",
+      "username": "nguyenvana",
+      "password": "matkhauan123"
+  }
+  validated_data = schema.load(data)
+  print(validated_data)  # In ra từ điển đã xác thực
+  ```
+
+### 4. `create_indexes()`
+- **Nhiệm vụ**: Tạo chỉ mục cho các collection `User` và `MedicalHistory` để tối ưu hóa truy vấn.
+- **Đầu vào**: Không có.
+- **Đầu ra**: Không có (tạo chỉ mục trong cơ sở dữ liệu).
+- **Tham số**: Không có.
+- **Kiểu dữ liệu**: Không áp dụng.
+- **Mô tả**: Tạo các chỉ mục duy nhất cho `user_id`, `email`, `username` (trong `User`) và `image_id`, `user_id` (trong `MedicalHistory`). Tạo chỉ mục văn bản cho `name` và `username` để hỗ trợ tìm kiếm. Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_schema import create_indexes
+  create_indexes()
+  # Kiểm tra chỉ mục
+  from db_schema import get_collections
+  collections = get_collections()
+  print(collections["User"].index_information())  # In ra thông tin chỉ mục
+  ```
+
+## Lưu Ý Khi Sử Dụng
+- Đảm bảo `db_config.py` được cấu hình đúng để `get_collections` hoạt động.
+- Các schema (`PatientSchema`, `MedicalHistorySchema`) đảm bảo dữ liệu hợp lệ trước khi chèn/cập nhật.
+- Gọi `create_indexes` sau khi khởi tạo cơ sở dữ liệu để tối ưu hóa hiệu suất truy vấn.
+- Theo dõi log để phát hiện lỗi khi tạo chỉ mục.
+
+## Ví Dụ Quy Trình Sử Dụng
+```python
+from db_schema import get_collections, create_indexes, PatientSchema
+
+# Lấy collections
+collections = get_collections()
+print(f"Collections: {collections.keys()}")
+
+# Xác thực dữ liệu bệnh nhân
+schema = PatientSchema()
+patient_data = {
+    "user_id": "patient1",
+    "name": "Nguyễn Văn A",
+    "role": "patient",
+    "email": "nguyenvana@example.com",
+    "gender": "male",
+    "birthdate": "01/01/1990",
+    "username": "nguyenvana",
+    "password": "matkhauan123"
+}
+validated_data = schema.load(patient_data)
+print(f"Dữ liệu đã xác thực: {validated_data}")
+
+# Tạo chỉ mục
+create_indexes()
+print("Đã tạo chỉ mục cho User và MedicalHistory")
+```

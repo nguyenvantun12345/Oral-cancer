@@ -1,0 +1,76 @@
+# Hướng Dẫn Sử Dụng data_utils.py
+
+## Tổng Quan
+File `data_utils.py` cung cấp các hàm để xử lý dữ liệu bệnh nhân, bao gồm điền giá trị thiếu (`fill_missing_data`) và tổng hợp, trực quan hóa dữ liệu để phát hiện ngoại lệ và nhiễu (`aggregate_and_visualize`). File sử dụng `pandas` để xử lý dữ liệu, `matplotlib` và `seaborn` để tạo biểu đồ, và `marshmallow` để xác thực. File cũng bao gồm hệ thống ghi log và lưu trữ kết quả (biểu đồ và báo cáo) vào thư mục được chỉ định.
+
+## Các Hàm
+
+### 1. `fill_missing_data(patient_data: Dict, reference_excel: Optional[str] = None) -> Dict`
+- **Nhiệm vụ**: Điền các giá trị thiếu trong dữ liệu bệnh nhân dựa trên giá trị mặc định hoặc phân bố từ file Excel.
+- **Đầu vào**:
+  - `patient_data`: Từ điển chứa dữ liệu bệnh nhân.
+  - `reference_excel`: Đường dẫn đến file Excel chứa dữ liệu tham chiếu (tùy chọn).
+- **Đầu ra**: Từ điển chứa dữ liệu bệnh nhân đã được điền giá trị thiếu.
+- **Tham số**:
+  - `patient_data`: `Dict`, dữ liệu bệnh nhân đầu vào.
+  - `reference_excel`: `Optional[str]`, đường dẫn file Excel (mặc định: `None`).
+- **Kiểu dữ liệu**:
+  - Đầu vào: `patient_data` (`Dict`), `reference_excel` (`Optional[str]`).
+  - Đầu ra: `Dict`.
+- **Mô tả**: Kiểm tra và xác thực định dạng `birthdate` (nếu có). Nếu có file Excel, tính phân bố cho `gender`, `birthdate` (tuổi), và `work`, sau đó điền giá trị thiếu bằng cách chọn ngẫu nhiên dựa trên phân bố. Nếu không có Excel, sử dụng giá trị mặc định (ví dụ: `name='Unknown'`, `birthdate='01/01/2000'`). Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from data_utils import fill_missing_data
+  patient = {"user_id": "patient1", "name": "Nguyễn Văn A"}
+  filled = fill_missing_data(patient, reference_excel="patients.xlsx")
+  print(filled)  # In ra: {'user_id': 'patient1', 'name': 'Nguyễn Văn A', 'birthdate': '...', ...}
+  ```
+
+### 2. `aggregate_and_visualize(patients: List[Dict], output_prefix: str) -> Dict`
+- **Nhiệm vụ**: Tổng hợp dữ liệu bệnh nhân, phát hiện ngoại lệ và nhiễu, và tạo biểu đồ trực quan (phân bố tuổi, giới tính, tương quan tuổi và điểm chẩn đoán).
+- **Đầu vào**:
+  - `patients`: Danh sách các từ điển chứa dữ liệu bệnh nhân.
+  - `output_prefix`: Tiền tố cho các file đầu ra (biểu đồ và báo cáo).
+- **Đầu ra**: Từ điển chứa báo cáo về ngoại lệ (`outliers`) và nhiễu (`noise`).
+- **Tham số**:
+  - `patients`: `List[Dict]`, danh sách dữ liệu bệnh nhân.
+  - `output_prefix`: `str`, tiền tố cho tên file đầu ra.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `patients` (`List[Dict]`), `output_prefix` (`str`).
+  - Đầu ra: `Dict` (với các khóa `outliers` và `noise`).
+- **Mô tả**: Chuyển danh sách bệnh nhân thành DataFrame, giới hạn tối đa 1000 bản ghi. Phát hiện nhiễu (tuổi âm, tuổi không thực tế, điểm chẩn đoán không hợp lệ) và ngoại lệ (dựa trên Z-score cho `age` và `diagnosis_score`). Tạo ba biểu đồ: phân bố tuổi, phân bố giới tính, và tương quan tuổi-điểm chẩn đoán (nếu có). Lưu biểu đồ và báo cáo vào thư mục `OUTPUT_DIR` với dấu thời gian. Ghi log các bước và lỗi.
+- **Ví dụ**:
+  ```python
+  from data_utils import aggregate_and_visualize
+  patients = [
+      {"user_id": "patient1", "birthdate": "01/01/1990", "gender": "male", "diagnosis_score": 0.85},
+      {"user_id": "patient2", "birthdate": "02/02/2000", "gender": "female", "diagnosis_score": 0.9}
+  ]
+  report = aggregate_and_visualize(patients, output_prefix="patient_analysis")
+  print(report)  # In ra: {'outliers': {...}, 'noise': {...}}
+  ```
+
+## Lưu Ý Khi Sử Dụng
+- **Thư viện yêu cầu**: Cần cài đặt `pandas`, `numpy`, `matplotlib`, `seaborn`, và `openpyxl` (cho đọc file Excel).
+- **Định dạng ngày**: Hàm `fill_missing_data` yêu cầu `birthdate` có định dạng `dd/mm/yyyy`. Nếu không, ném lỗi `ValidationError`.
+- **Hiệu suất**: Hàm `aggregate_and_visualize` giới hạn 1000 bản ghi để tránh tốn tài nguyên. Điều chỉnh nếu cần.
+- **Thư mục đầu ra**: Biến môi trường `OUTPUT_DIR` xác định thư mục lưu biểu đồ và báo cáo (mặc định: `/tmp/patient_data`). Đảm bảo quyền ghi.
+- **Ghi log**: Theo dõi log để phát hiện lỗi định dạng dữ liệu hoặc vấn đề khi tạo biểu đồ.
+
+## Ví Dụ Quy Trình Sử Dụng
+```python
+from data_utils import fill_missing_data, aggregate_and_visualize
+
+# Điền giá trị thiếu
+patient = {"user_id": "patient1", "name": "Nguyễn Văn A"}
+filled = fill_missing_data(patient)
+print(f"Dữ liệu đã điền: {filled}")
+
+# Tổng hợp và trực quan hóa
+patients = [
+    {"user_id": "patient1", "birthdate": "01/01/1990", "gender": "male", "diagnosis_score": 0.85},
+    {"user_id": "patient2", "birthdate": "02/02/2000", "gender": "female", "diagnosis_score": 0.9}
+]
+report = aggregate_and_visualize(patients, output_prefix="test_analysis")
+print(f"Báo cáo: {report}")
+```

@@ -1,0 +1,335 @@
+# Hướng Dẫn Sử Dụng db_query.py
+
+## Tổng Quan
+File `db_query.py` cung cấp các lớp (`Patient` và `MedicalHistoryCRUD`) để thực hiện các thao tác CRUD (Tạo, Đọc, Cập nhật, Xóa) trên dữ liệu bệnh nhân và lịch sử y tế trong cơ sở dữ liệu MongoDB. File sử dụng `pymongo` để tương tác với cơ sở dữ liệu, `marshmallow` để xác thực dữ liệu, và bao gồm ghi log để theo dõi các thao tác. File phụ thuộc vào `db_schema.py` cho các schema và `db_config.py` để truy cập cơ sở dữ liệu.
+
+## Các Lớp và Phương Thức
+
+### Lớp: `Patient`
+- **Nhiệm vụ**: Quản lý các thao tác CRUD liên quan đến bệnh nhân trong collection `User`.
+- **Phụ thuộc**: `get_collections` (từ `db_schema.py`), `PatientSchema`, `MedicalHistoryCRUD`, `hash_password` (từ `auth_utils.py`).
+
+#### 1. `Patient.__init__(self)`
+- **Nhiệm vụ**: Khởi tạo phiên bản `Patient` với tham chiếu tới collection và schema.
+- **Đầu vào**:
+  - `self`: Phiên bản của `Patient`.
+- **Đầu ra**: Không có (thiết lập các thuộc tính của phiên bản).
+- **Tham số**: Không có.
+- **Kiểu dữ liệu**: Không áp dụng.
+- **Mô tả**: Lấy các collection bằng `get_collections`, thiết lập `self.collection` thành collection `User`, khởi tạo `self.schema` với `PatientSchema`, và tạo một phiên bản `MedicalHistoryCRUD`.
+- **Ví dụ**:
+  ```python
+  from db_query import Patient
+  patient_repo = Patient()
+  print(patient_repo.collection.name)  # In ra: User
+  ```
+
+#### 2. `Patient.create_many(self, data_list: List[dict]) -> List[str]`
+- **Nhiệm vụ**: Tạo nhiều bản ghi bệnh nhân trong collection `User`.
+- **Đầu vào**:
+  - `self`: Phiên bản của `Patient`.
+  - `data_list`: Danh sách các từ điển chứa dữ liệu bệnh nhân.
+- **Đầu ra**: Danh sách các chuỗi `user_id` của các bệnh nhân đã tạo.
+- **Tham số**:
+  - `data_list`: `List[dict]`, mỗi từ điển chứa các trường bệnh nhân (ví dụ: `user_id`, `name`, `email`).
+- **Kiểu dữ liệu**:
+  - Đầu vào: `data_list` (`List[dict]`).
+  - Đầu ra: `List[str]`.
+- **Mô tả**: Xác thực từng từ điển bằng `PatientSchema`, mã hóa mật khẩu nếu có, chèn các bản ghi vào collection `User`, và trả về các giá trị `user_id`. Ghi log thành công hoặc ném lỗi khi xác thực hoặc chèn thất bại.
+- **Ví dụ**:
+  ```python
+  from db_query import Patient
+  patient_repo = Patient()
+  patients = [
+      {
+          "user_id": "patient1",
+          "name": "Nguyễn Văn A",
+          "role": "patient",
+          "email": "nguyenvana@example.com",
+          "gender": "male",
+          "phone": "1234567890",
+          "birthdate": "01/01/1990",
+          "username": "nguyenvana",
+          "password": "matkhauan123"
+      }
+  ]
+  user_ids = patient_repo.create_many(patients)
+  print(user_ids)  # In ra: ['patient1']
+  ```
+
+#### 3. `Patient.createPatient(self, patients: List[dict]) -> List[str]`
+- **Nhiệm vụ**: Hàm bao bọc cho `create_many` để tạo các bản ghi bệnh nhân.
+- **Đầu vào**:
+  - `self`: Phiên bản của `Patient`.
+  - `patients`: Danh sách các từ điển chứa dữ liệu bệnh nhân.
+- **Đầu ra**: Danh sách các chuỗi `user_id` của các bệnh nhân đã tạo.
+- **Tham số**:
+  - `patients`: `List[dict]`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `patients` (`List[dict]`).
+  - Đầu ra: `List[str]`.
+- **Mô tả**: Chuyển giao cho `create_many` để thực hiện chèn. Được cung cấp để đảm bảo tương thích ngược hoặc sử dụng tên gọi thay thế.
+- **Ví dụ**:
+  ```python
+  from db_query import Patient
+  patient_repo = Patient()
+  patients = [
+      {
+          "user_id": "patient2",
+          "name": "Trần Thị B",
+          "role": "patient",
+          "email": "tranthib@example.com",
+          "gender": "female",
+          "birthdate": "02/02/1995",
+          "username": "tranthib",
+          "password": "matkhaub456"
+      }
+  ]
+  user_ids = patient_repo.createPatient(patients)
+  print(user_ids)  # In ra: ['patient2']
+  ```
+
+#### 4. `Patient.get_patient_by_id(self, user_id: str) -> Optional[dict]`
+- **Nhiệm vụ**: Lấy bản ghi bệnh nhân theo `user_id`.
+- **Đầu vào**:
+  - `self`: Phiên bản của `Patient`.
+  - `user_id`: Định danh duy nhất của bệnh nhân.
+- **Đầu ra**: Từ điển chứa dữ liệu bệnh nhân hoặc `None` nếu không tìm thấy.
+- **Tham số**:
+  - `user_id`: `str`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`).
+  - Đầu ra: `Optional[dict]`.
+- **Mô tả**: Truy vấn collection `User` để tìm tài liệu khớp với `user_id`. Ghi log thành công hoặc cảnh báo. Trả về `None` khi thất bại hoặc không tìm thấy bệnh nhân.
+- **Ví dụ**:
+  ```python
+  from db_query import Patient
+  patient_repo = Patient()
+  patient = patient_repo.get_patient_by_id("patient1")
+  print(patient)  # In ra: {'user_id': 'patient1', 'name': 'Nguyễn Văn A', ...}
+  ```
+
+#### 5. `Patient.search_patients(self, search_text: str, limit: int = 10, skip: int = 0) -> List[dict]`
+- **Nhiệm vụ**: Tìm kiếm bệnh nhân theo `name` hoặc `username` sử dụng truy vấn regex.
+- **Đầu vào**:
+  - `self`: Phiên bản của `Patient`.
+  - `search_text`: Văn bản để tìm kiếm trong các trường `name` hoặc `username`.
+  - `limit`: Số lượng kết quả tối đa trả về (mặc định: 10).
+  - `skip`: Số lượng kết quả bỏ qua để phân trang (mặc định: 0).
+- **Đầu ra**: Danh sách các từ điển bệnh nhân khớp với tiêu chí tìm kiếm.
+- **Tham số**:
+  - `search_text`: `str`.
+  - `limit`: `int`.
+  - `skip`: `int`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `search_text` (`str`), `limit` (`int`), `skip` (`int`).
+  - Đầu ra: `List[dict]`.
+- **Mô tả**: Xây dựng truy vấn MongoDB với `$or` để khớp regex không phân biệt chữ hoa/thường trên `name` hoặc `username`. Áp dụng `skip` và `limit` để phân trang. Trả về danh sách rỗng khi có lỗi.
+- **Ví dụ**:
+  ```python
+  from db_query import Patient
+  patient_repo = Patient()
+  results = patient_repo.search_patients("nguyen", limit=5, skip=0)
+  print(results)  # In ra: [{'user_id': 'patient1', 'name': 'Nguyễn Văn A', ...}]
+  ```
+
+#### 6. `Patient.update_patient(self, user_id: str, patient_data: dict) -> bool`
+- **Nhiệm vụ**: Cập nhật dữ liệu bệnh nhân và thêm dấu thời gian vào `MedicalHistory` nếu tồn tại.
+- **Đầu vào**:
+  - `self`: Phiên bản của `Patient`.
+  - `user_id`: Định danh duy nhất của bệnh nhân.
+  - `patient_data`: Từ điển chứa các trường cần cập nhật.
+- **Đầu ra**: `True` nếu cập nhật thành công, `False` nếu không.
+- **Tham số**:
+  - `user_id`: `str`.
+  - `patient_data`: `dict`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), `patient_data` (`dict`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Xác thực `patient_data` bằng `PatientSchema` (xác thực một phần). Cập nhật bản ghi bệnh nhân trong collection `User`. Nếu `MedicalHistory` tồn tại cho `user_id`, thêm dấu thời gian hiện tại vào mảng `date`. Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_query import Patient
+  patient_repo = Patient()
+  update_data = {"name": "Nguyễn Văn An"}
+  success = patient_repo.update_patient("patient1", update_data)
+  print(success)  # In ra: True
+  ```
+
+#### 7. `Patient.delete_patient(self, user_id: str) -> bool`
+- **Nhiệm vụ**: Xóa bệnh nhân và `MedicalHistory` liên quan.
+- **Đầu vào**:
+  - `self`: Phiên bản của `Patient`.
+  - `user_id`: Định danh duy nhất của bệnh nhân.
+- **Đầu ra**: `True` nếu xóa thành công, `False` nếu không.
+- **Tham số**:
+  - `user_id`: `str`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Xóa bản ghi bệnh nhân khỏi collection `User` và gọi `MedicalHistoryCRUD.delete_medical_history` để xóa lịch sử liên quan. Ghi log thành công hoặc cảnh báo.
+- **Ví dụ**:
+  ```python
+  from db_query import Patient
+  patient_repo = Patient()
+  success = patient_repo.delete_patient("patient1")
+  print(success)  # In ra: True
+  ```
+
+### Lớp: `MedicalHistoryCRUD`
+- **Nhiệm vụ**: Quản lý các thao tác CRUD cho các bản ghi lịch sử y tế trong collection `MedicalHistory`.
+- **Phụ thuộc**: `get_collections` (từ `db_schema.py`), `MedicalHistorySchema`.
+
+#### 1. `MedicalHistoryCRUD.__init__(self)`
+- **Nhiệm vụ**: Khởi tạo phiên bản `MedicalHistoryCRUD` với tham chiếu tới collection và schema.
+- **Đầu vào**:
+  - `self`: Phiên bản của `MedicalHistoryCRUD`.
+- **Đầu ra**: Không có (thiết lập các thuộc tính của phiên bản).
+- **Tham số**: Không có.
+- **Kiểu dữ liệu**: Không áp dụng.
+- **Mô tả**: Lấy các collection bằng `get_collections`, thiết lập `self.collection` thành collection `MedicalHistory`, và khởi tạo `self.schema` với `MedicalHistorySchema`.
+- **Ví dụ**:
+  ```python
+  from db_query import MedicalHistoryCRUD
+  history_repo = MedicalHistoryCRUD()
+  print(history_repo.collection.name)  # In ra: MedicalHistory
+  ```
+
+#### 2. `MedicalHistoryCRUD.create_medical_history(self, medical_history: dict) -> bool`
+- **Nhiệm vụ**: Tạo bản ghi lịch sử y tế mới với dấu thời gian.
+- **Đầu vào**:
+  - `self`: Phiên bản của `MedicalHistoryCRUD`.
+  - `medical_history`: Từ điển chứa dữ liệu lịch sử y tế.
+- **Đầu ra**: `True` nếu tạo thành công, `False` nếu không.
+- **Tham số**:
+  - `medical_history`: `dict`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `medical_history` (`dict`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Xác thực `medical_history` bằng `MedicalHistorySchema`. Kiểm tra xem bản ghi đã tồn tại cho `user_id` chưa. Nếu chưa, thêm dấu thời gian hiện tại vào trường `date` và chèn bản ghi. Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_query import MedicalHistoryCRUD
+  history_repo = MedicalHistoryCRUD()
+  medical_history = {
+      "user_id": "patient1",
+      "image_id": "img1",
+      "image": "https://example.com/image.jpg",
+      "comment": "Quét lần đầu",
+      "diagnosis_score": 0.85
+  }
+  success = history_repo.create_medical_history(medical_history)
+  print(success)  # In ra: True
+  ```
+
+#### 3. `MedicalHistoryCRUD.update_medical_history(self, user_id: str, medical_data: dict) -> bool`
+- **Nhiệm vụ**: Cập nhật bản ghi lịch sử y tế và thêm dấu thời gian.
+- **Đầu vào**:
+  - `self`: Phiên bản của `MedicalHistoryCRUD`.
+  - `user_id`: Định danh duy nhất của bệnh nhân.
+  - `medical_data`: Từ điển chứa các trường cần cập nhật.
+- **Đầu ra**: `True` nếu cập nhật thành công, `False` nếu không.
+- **Tham số**:
+  - `user_id`: `str`.
+  - `medical_data`: `dict`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`), `medical_data` (`dict`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Xác thực `medical_data` bằng `MedicalHistorySchema` (xác thực một phần). Lấy lịch sử hiện tại, thêm dấu thời gian hiện tại vào trường `date`, và cập nhật bản ghi (với upsert). Ghi log thành công hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from db_query import MedicalHistoryCRUD
+  history_repo = MedicalHistoryCRUD()
+  update_data = {"diagnosis_score": 0.9}
+  success = history_repo.update_medical_history("patient1", update_data)
+  print(success)  # In ra: True
+  ```
+
+#### 4. `MedicalHistoryCRUD.get_medical_history_by_user_id(self, user_id: str) -> Optional[dict]`
+- **Nhiệm vụ**: Lấy bản ghi lịch sử y tế theo `user_id`.
+- **Đầu vào**:
+  - `self`: Phiên bản của `MedicalHistoryCRUD`.
+  - `user_id`: Định danh duy nhất của bệnh nhân.
+- **Đầu ra**: Từ điển chứa dữ liệu lịch sử y tế hoặc từ điển rỗng nếu không tìm thấy.
+- **Tham số**:
+  - `user_id`: `str`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`).
+  - Đầu ra: `Optional[dict]`.
+- **Mô tả**: Truy vấn collection `MedicalHistory` để tìm tài liệu khớp với `user_id`. Trả về từ điển rỗng nếu không tìm thấy bản ghi. Ghi log lỗi.
+- **Ví dụ**:
+  ```python
+  from db_query import MedicalHistoryCRUD
+  history_repo = MedicalHistoryCRUD()
+  history = history_repo.get_medical_history_by_user_id("patient1")
+  print(history)  # In ra: {'user_id': 'patient1', 'image_id': 'img1', ...}
+  ```
+
+#### 5. `MedicalHistoryCRUD.delete_medical_history(self, user_id: str) -> bool`
+- **Nhiệm vụ**: Xóa bản ghi lịch sử y tế theo `user_id`.
+- **Đầu vào**:
+  - `self`: Phiên bản của `MedicalHistoryCRUD`.
+  - `user_id`: Định danh duy nhất của bệnh nhân.
+- **Đầu ra**: `True` nếu xóa thành công, `False` nếu không.
+- **Tham số**:
+  - `user_id`: `str`.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `user_id` (`str`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Xóa bản ghi lịch sử y tế khỏi collection `MedicalHistory`. Ghi log thành công hoặc cảnh báo.
+- **Ví dụ**:
+  ```python
+  from db_query import MedicalHistoryCRUD
+  history_repo = MedicalHistoryCRUD()
+  success = history_repo.delete_medical_history("patient1")
+  print(success)  # In ra: True
+  ```
+
+## Lưu Ý Khi Sử Dụng
+- Đảm bảo các phụ thuộc (`db_schema.py`, `db_config.py`, `auth_utils.py`) được cấu hình đúng.
+- Các thao tác CRUD sử dụng xác thực dữ liệu qua `marshmallow` để đảm bảo tính toàn vẹn dữ liệu.
+- Theo dõi log để phát hiện lỗi xác thực hoặc thao tác cơ sở dữ liệu.
+- Các hàm trong `Patient` và `MedicalHistoryCRUD` được thiết kế để xử lý lỗi một cách an toàn, trả về giá trị mặc định (như `None` hoặc `False`) khi có lỗi.
+
+## Ví Dụ Quy Trình Sử Dụng
+```python
+from db_query import Patient, MedicalHistoryCRUD
+
+# Khởi tạo repository
+patient_repo = Patient()
+history_repo = MedicalHistoryCRUD()
+
+# Tạo bệnh nhân
+patient_data = [{
+    "user_id": "patient1",
+    "name": "Nguyễn Văn A",
+    "role": "patient",
+    "email": "nguyenvana@example.com",
+    "gender": "male",
+    "birthdate": "01/01/1990",
+    "username": "nguyenvana",
+    "password": "matkhauan123"
+}]
+user_ids = patient_repo.create_many(patient_data)
+print(f"Đã tạo bệnh nhân: {user_ids}")
+
+# Tạo lịch sử y tế
+medical_history = {
+    "user_id": "patient1",
+    "image_id": "img1",
+    "image": "https://example.com/image.jpg",
+    "comment": "Quét lần đầu",
+    "diagnosis_score": 0.85
+}
+success = history_repo.create_medical_history(medical_history)
+print(f"Tạo lịch sử y tế: {success}")
+
+# Cập nhật bệnh nhân
+update_data = {"name": "Nguyễn Văn An"}
+success = patient_repo.update_patient("patient1", update_data)
+print(f"Cập nhật bệnh nhân: {success}")
+
+# Xóa bệnh nhân và lịch sử y tế
+success = patient_repo.delete_patient("patient1")
+print(f"Xóa bệnh nhân: {success}")
+```

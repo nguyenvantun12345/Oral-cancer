@@ -1,0 +1,71 @@
+# Hướng Dẫn Sử Dụng auth_utils.py
+
+## Tổng Quan
+File `auth_utils.py` cung cấp các hàm để xử lý xác thực người dùng, bao gồm mã hóa mật khẩu (`hash_password`) và xác minh mật khẩu (`verify_password`) sử dụng thư viện `bcrypt`. File tích hợp hệ thống ghi log để theo dõi các thao tác và lỗi, đảm bảo an toàn cho việc quản lý mật khẩu.
+
+## Các Hàm
+
+### 1. `hash_password(password: str) -> str`
+- **Nhiệm vụ**: Mã hóa mật khẩu bằng thuật toán bcrypt.
+- **Đầu vào**:
+  - `password`: Mật khẩu dạng văn bản (`str`).
+- **Đầu ra**: Chuỗi mật khẩu đã mã hóa (`str`).
+- **Tham số**:
+  - `password`: `str`, mật khẩu đầu vào.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `password` (`str`).
+  - Đầu ra: `str`.
+- **Mô tả**: Mã hóa mật khẩu bằng `bcrypt.hashpw` với muối ngẫu nhiên (`bcrypt.gensalt`). Chuyển mật khẩu thành `utf-8` trước khi mã hóa và trả về chuỗi mã hóa dạng `utf-8`. Ghi log thành công hoặc ném lỗi nếu thất bại.
+- **Ví dụ**:
+  ```python
+  from auth_utils import hash_password
+  password = "matkhauan123"
+  hashed = hash_password(password)
+  print(f"Mật khẩu đã mã hóa: {hashed}")
+  ```
+
+### 2. `verify_password(plain_password: str, hashed_password: str) -> bool`
+- **Nhiệm vụ**: Xác minh mật khẩu văn bản có khớp với mật khẩu đã mã hóa hay không.
+- **Đầu vào**:
+  - `plain_password`: Mật khẩu văn bản cần xác minh (`str`).
+  - `hashed_password`: Mật khẩu đã mã hóa (`str`).
+- **Đầu ra**: `True` nếu mật khẩu khớp, `False` nếu không khớp hoặc có lỗi.
+- **Tham số**:
+  - `plain_password`: `str`, mật khẩu văn bản.
+  - `hashed_password`: `str`, mật khẩu đã mã hóa.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `plain_password` (`str`), `hashed_password` (`str`).
+  - Đầu ra: `bool`.
+- **Mô tả**: Sử dụng `bcrypt.checkpw` để so sánh `plain_password` (mã hóa `utf-8`) với `hashed_password`. Trả về `True` nếu khớp, `False` nếu không khớp hoặc xảy ra lỗi. Ghi log kết quả hoặc lỗi.
+- **Ví dụ**:
+  ```python
+  from auth_utils import hash_password, verify_password
+  password = "matkhauan123"
+  hashed = hash_password(password)
+  result = verify_password(password, hashed)
+  print(f"Xác minh mật khẩu: {result}")  # In ra: True
+  ```
+
+## Lưu Ý Khi Sử Dụng
+- **Thư viện yêu cầu**: Cần cài đặt `bcrypt`.
+- **Bảo mật**: Hàm `hash_password` sử dụng muối ngẫu nhiên để tăng cường bảo mật. Không lưu mật khẩu văn bản.
+- **Mã hóa**: Cả hai hàm sử dụng mã hóa `utf-8` để đảm bảo tương thích với các ký tự đặc biệt.
+- **Ghi log**: Theo dõi log để phát hiện lỗi trong quá trình mã hóa hoặc xác minh.
+
+## Ví Dụ Quy Trình Sử Dụng
+```python
+from auth_utils import hash_password, verify_password
+
+# Mã hóa mật khẩu
+password = "matkhauan123"
+hashed = hash_password(password)
+print(f"Mật khẩu đã mã hóa: {hashed}")
+
+# Xác minh mật khẩu
+is_valid = verify_password(password, hashed)
+print(f"Mật khẩu hợp lệ: {is_valid}")
+
+# Xác minh mật khẩu sai
+is_valid = verify_password("saimatkhau", hashed)
+print(f"Mật khẩu sai: {is_valid}")
+```

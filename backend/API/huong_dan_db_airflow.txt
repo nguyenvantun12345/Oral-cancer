@@ -1,0 +1,174 @@
+# Hướng Dẫn Sử Dụng db_airflow.py
+
+## Tổng Quan
+File `db_airflow.py` định nghĩa hai pipeline Airflow (`patient_data_pipeline` và `patient_data_pipeline_manual`) để xử lý và phân tích dữ liệu bệnh nhân. Pipeline thực hiện các nhiệm vụ như thu thập dữ liệu, xuất ra Excel, phân tích và trực quan hóa, khai thác luật kết hợp, dự đoán và phân cụm, và lưu trữ vào Redis. File sử dụng `pandas` để xử lý dữ liệu, `matplotlib` và `seaborn` để trực quan hóa, `mlxtend` và `scikit-learn` để phân tích máy học, và tích hợp với `db_query.py` và `db_redis.py` để truy xuất và lưu trữ dữ liệu. Hệ thống ghi log được sử dụng để theo dõi.
+
+## Các Thành Phần Chính
+
+### 1. Cấu Hình
+- **Thư viện yêu cầu**: `airflow`, `pandas`, `matplotlib`, `seaborn`, `mlxtend`, `scikit-learn`, `joblib`.
+- **Thư mục đầu ra**: `/tmp/patient_data` (tạo tự động nếu chưa tồn tại).
+- **Redis**: Sử dụng `RedisCache` từ `db_redis.py` để lưu trữ và truy xuất dữ liệu.
+- **Logging**: Ghi log với mức `INFO` để theo dõi các bước và lỗi.
+
+### 2. Pipeline Airflow
+- **DAG 1: `patient_data_pipeline`**:
+  - **Mô tả**: Chạy hàng ngày lúc 00:00, bắt đầu từ 30/04/2025.
+  - **Lịch chạy**: `0 0 * * *`.
+  - **Không chạy lại các lần trước** (`catchup=False`).
+- **DAG 2: `patient_data_pipeline_manual`**:
+  - **Mô tả**: Chạy thủ công, không có lịch cố định.
+  - **Bắt đầu**: Một ngày trước thời điểm hiện tại.
+- **Default Args**:
+  - `owner`: `airflow`.
+  - `retries`: 1.
+  - Không gửi email khi thất bại hoặc thử lại.
+
+### 3. Các Hàm (Task trong Pipeline)
+
+#### 3.1. `fetch_and_export_to_excel(ti)`
+- **Nhiệm vụ**: Thu thập dữ liệu bệnh nhân và lịch sử y tế, xuất ra file Excel.
+- **Đầu vào**:
+  - `ti`: Task instance (đối tượng Airflow để đẩy/pull dữ liệu XCom).
+- **Đầu ra**: Không trả về trực tiếp, đẩy `combined_records` vào XCom.
+- **Tham số**:
+  - `ti`: Task instance.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `ti` (Airflow task instance).
+  - Đầu ra: Không có (XCom: `List[Dict]`).
+- **Mô tả**: Lấy danh sách bệnh nhân từ `Patient.search_patients`. Với mỗi bệnh nhân, lấy lịch sử y tế từ `RedisCache.get_medical_history` hoặc `MedicalHistoryCRUD.get_medical_history_by_user_id`. Kết hợp dữ liệu thành `combined_records`, chuyển thành DataFrame, và lưu vào file Excel với tên có dấu thời gian. Đẩy `combined_records` vào XCom.
+- **Ví dụ**:
+  ```python
+  from airflow.operators.python import get_task_instance
+  from db_airflow import fetch_and_export_to_excel
+  ti = get_task_instance()  # Giả lập
+  fetch_and_export_to_excel(ti)
+  records = ti.xcom_pull(key='combined_records')
+  print(records)  # [{'user_id': 'USR123', 'name': 'Nguyễn Văn A', ...}, ...]
+  ```
+
+#### 3.2. `analyze_and_visualize(ti)`
+- **Nhiệm vụ**: Phân tích dữ liệu và tạo biểu đồ trực quan.
+- **Đầu vào**:
+  - `ti`: Task instance (lấy `combined_records` từ XCom).
+- **Đầu ra**: Không trả về trực tiếp, lưu file thống kê và biểu đồ.
+- **Tham số**:
+  - `ti`: Task instance.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `ti` (Airflow task instance).
+  - Đầu ra: Không có (lưu file CSV và PNG).
+- **Mô tả**: Lấy `combined_records` từ XCom, chuyển thành DataFrame. Tính thống kê cơ bản (`describe`) và lưu vào CSV. Tạo ba biểu đồ: phân bố điểm chẩn đoán (`sns.histplot`), phân bố giới tính (`sns.countplot`), và phân bố tuổi (`sns.histplot`). Lưu biểu đồ vào `/tmp/patient_data` với dấu thời gian. Kiểm tra quyền ghi và thử lại nếu cần.
+- **Ví dụ**:
+  ```python
+  from airflow.operators.python import get_task_instance
+  from db_airflow import analyze_and_visualize
+  ti = get_task_instance()
+  ti.xcom_push(key='combined_records', value=[{'diagnosis_score': 0.85, 'gender': 'male', 'birthdate': '01/01/1990'}])
+  analyze_and_visualize(ti)
+  # Kiểm tra file: /tmp/patient_data/score_dist_<timestamp>.png
+  ```
+
+#### 3.3. `mine_association_rules(ti)`
+- **Nhiệm vụ**: Khai thác luật kết hợp dựa trên giới tính và nhóm tuổi.
+- **Đầu vào**:
+  - `ti`: Task instance (lấy `combined_records` từ XCom).
+- **Đầu ra**: Không trả về trực tiếp, lưu luật vào CSV và đẩy vào XCom.
+- **Tham số**:
+  - `ti`: Task instance.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `ti` (Airflow task instance).
+  - Đầu ra: Không có (XCom: `Dict` chứa luật).
+- **Mô tả**: Lấy `combined_records`, tính nhóm tuổi (`0-18`, `19-35`, `36-60`, `61+`). Mã hóa `gender` và `age_group` bằng `get_dummies`. Áp dụng thuật toán Apriori (`min_support=0.1`) và tạo luật kết hợp (`min_confidence=0.7`). Lưu luật vào CSV và đẩy vào XCom.
+- **Ví dụ**:
+  ```python
+  from airflow.operators.python import get_task_instance
+  from db_airflow import mine_association_rules
+  ti = get_task_instance()
+  ti.xcom_push(key='combined_records', value=[{'gender': 'male', 'birthdate': '01/01/1990'}])
+  mine_association_rules(ti)
+  rules = ti.xcom_pull(key='association_rules')
+  print(rules)  # {'antecedents': [...], 'consequents': [...], ...}
+  ```
+
+#### 3.4. `predictive_and_clustering(ti)`
+- **Nhiệm vụ**: Dự đoán điểm chẩn đoán và phân cụm bệnh nhân.
+- **Đầu vào**:
+  - `ti`: Task instance (lấy `combined_records` từ XCom).
+- **Đầu ra**: Không trả về trực tiếp, lưu mô hình, cụm, và đẩy độ chính xác vào XCom.
+- **Tham số**:
+  - `ti`: Task instance.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `ti` (Airflow task instance).
+  - Đầu ra: Không có (XCom: `float` cho độ chính xác).
+- **Mô tả**: Lấy `combined_records`, tính tuổi, loại bỏ giá trị `NaN`. Mã hóa `gender` bằng `LabelEncoder`. Sử dụng `LogisticRegression` để dự đoán điểm chẩn đoán (>0.5) và `KMeans` (3 cụm) để phân cụm. Lưu mô hình (`joblib`), cụm (CSV), và đẩy độ chính xác vào XCom. Xử lý trường hợp dữ liệu không đủ.
+- **Ví dụ**:
+  ```python
+  from airflow.operators.python import get_task_instance
+  from db_airflow import predictive_and_clustering
+  ti = get_task_instance()
+  ti.xcom_push(key='combined_records', value=[
+      {'birthdate': '01/01/1990', 'gender': 'male', 'diagnosis_score': 0.85},
+      {'birthdate': '02/02/2000', 'gender': 'female', 'diagnosis_score': 0.9}
+  ])
+  predictive_and_clustering(ti)
+  accuracy = ti.xcom_pull(key='model_accuracy')
+  print(accuracy)  # 0.85
+  ```
+
+#### 3.5. `cache_data_to_redis(ti)`
+- **Nhiệm vụ**: Lưu dữ liệu vào Redis.
+- **Đầu vào**:
+  - `ti`: Task instance (lấy `combined_records` từ XCom).
+- **Đầu ra**: Không trả về trực tiếp, ghi log số bản ghi được lưu.
+- **Tham số**:
+  - `ti`: Task instance.
+- **Kiểu dữ liệu**:
+  - Đầu vào: `ti` (Airflow task instance).
+  - Đầu ra: Không có.
+- **Mô tả**: Lấy `combined_records`, sử dụng `RedisCache.cache_from_airflow` để lưu vào Redis (giới hạn 100 bản ghi). Ghi log số bản ghi được lưu. Ném lỗi nếu thất bại.
+- **Ví dụ**:
+  ```python
+  from airflow.operators.python import get_task_instance
+  from db_airflow import cache_data_to_redis
+  ti = get_task_instance()
+  ti.xcom_push(key='combined_records', value=[{'user_id': 'USR123', 'name': 'Nguyễn Văn A'}])
+  cache_data_to_redis(ti)
+  # Kiểm tra log: "Cached 1 records to Redis"
+  ```
+
+### 4. Cấu Trúc Pipeline
+- **Task Dependency**: `fetch_and_export >> analyze_and_visualize >> mine_association_rules >> predictive_and_clustering >> cache_data_to_redis`.
+- **Chức năng từng task**:
+  1. Thu thập và xuất dữ liệu.
+  2. Phân tích và trực quan hóa.
+  3. Khai thác luật kết hợp.
+  4. Dự đoán và phân cụm.
+  5. Lưu vào Redis.
+
+## Lưu Ý Khi Sử Dụng
+- **Redis**: Đảm bảo Redis chạy và cấu hình đúng.
+- **Quyền ghi**: Đảm bảo quyền ghi vào `/tmp/patient_data`.
+- **Dữ liệu đầu vào**: Pipeline yêu cầu dữ liệu từ `Patient.search_patients` và lịch sử y tế từ Redis hoặc `MedicalHistoryCRUD`.
+- **Hiệu suất**: Pipeline giới hạn 100 bản ghi khi lưu vào Redis. Điều chỉnh nếu cần.
+- **Định dạng ngày**: `birthdate` phải là `dd/mm/yyyy`.
+- **Kiểm thử**: Chạy pipeline thủ công (`patient_data_pipeline_manual`) để kiểm tra trước khi triển khai lịch tự động.
+
+## Ví Dụ Quy Trình Sử Dụng
+1. **Cấu hình Airflow**:
+   - Cài đặt Airflow và các thư viện cần thiết.
+   - Đảm bảo Redis chạy.
+   - Đặt file `db_airflow.py` vào thư mục DAGs của Airflow.
+
+2. **Chạy pipeline thủ công**:
+   ```bash
+   airflow dags trigger -d patient_data_pipeline_manual
+   ```
+
+3. **Kiểm tra đầu ra**:
+   - File Excel: `/tmp/patient_data/report_<timestamp>.xlsx`.
+   - Biểu đồ: `/tmp/patient_data/score_dist_<timestamp>.png`, `gender_dist_<timestamp>.png`, `age_dist_<timestamp>.png`.
+   - Luật kết hợp: `/tmp/patient_data/rules_<timestamp>.csv`.
+   - Mô hình và cụm: `/tmp/patient_data/model_<timestamp>.pkl`, `predictions_clusters_<timestamp>.csv`.
+
+4. **Theo dõi log**:
+   - Kiểm tra log Airflow để xác nhận các bước hoàn thành hoặc phát hiện lỗi.
