@@ -17,9 +17,11 @@ from db_redis import RedisCache
 from pydantic import ValidationError as PydanticValidationError
 import pandas as pd
 import numpy as np
+from fastapi import APIRouter
+from core.config import JWT_SECRET, ALGORITHM
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+
+router = APIRouter()
 
 app = FastAPI()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -34,11 +36,7 @@ async def validation_exception_handler(request, exc):
         content={"detail": error_messages}
     )
 
-SECRET_KEY = os.getenv("JWT_SECRET", "f7b3e8c2a9d4f1e6b0c7a8d5e2f3b9c0a1d4e7f8")
-if not os.getenv("JWT_SECRET"):
-    logger.warning("JWT_SECRET not set in environment variables, using default key")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
 
 REFERENCE_EXCEL = os.path.join(os.getenv("OUTPUT_DIR", "/tmp/patient_data"), "report_latest.xlsx")
 
@@ -364,46 +362,6 @@ async def delete_medical_history(user_id: str, current_user: Dict = Depends(get_
         logger.error(f"Error deleting medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/register", response_model=Dict)
-async def register(patient: PatientCreate):
-    try:
-        patient_data = patient.dict()
-        patient_data = fill_missing_data(patient_data, REFERENCE_EXCEL)
-        patient_data['password'] = hash_password(patient_data['password'])
-        patient_data['user_id'] = f"USR{int(datetime.now(timezone.utc).timestamp())}"
-        redis_cache = RedisCache()
-        user_ids = redis_cache.create_patient([patient_data])
-        if not user_ids:
-            raise HTTPException(status_code=400, detail="Failed to register user")
-        logger.info(f"Registered user: {patient_data['username']}")
-        return {"message": "User registered", "username": patient_data['username']}
-    except ValidationError as ve:
-        raise HTTPException(status_code=400, detail=ve.messages)
-    except Exception as e:
-        logger.error(f"Error registering user: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/login", response_model=Dict)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    try:
-        redis_cache = RedisCache()
-        user = redis_cache.get_cached_user(form_data.username)
-        if not user or not verify_password(form_data.password, user['password']):
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = jwt.encode(
-            {"sub": form_data.username, "exp": datetime.now(timezone.utc) + access_token_expires},
-            SECRET_KEY,
-            algorithm=ALGORITHM
-        )
-        logger.info(f"User logged in: {form_data.username}")
-        return {"access_token": access_token, "token_type": "bearer"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error during login: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
 if __name__ == "__main__":
     from fastapi.testclient import TestClient
     import uuid
@@ -449,6 +407,8 @@ if __name__ == "__main__":
             print(f"Đã dọn dẹp dữ liệu cho user_id {user_id}")
         except Exception as e:
             print(f"Lỗi khi dọn dẹp: {str(e)}")
+            
+####################################### TEST ###############################################
 
     print("Test 1: Đăng ký tài khoản mới")
     try:
