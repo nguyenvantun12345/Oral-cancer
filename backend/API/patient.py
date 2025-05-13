@@ -1,5 +1,4 @@
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, validator
@@ -8,126 +7,40 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import logging
 import os
-from auth_utils import hash_password, verify_password
-from checkquailty import process_multiple_images, load_image
+from core.utils import hash_password, verify_password
+from core.checkquailty import process_multiple_images, load_image
 from solvequality import enhance_image
 from data_utils import fill_missing_data, aggregate_and_visualize
 from marshmallow import ValidationError
-from db_redis import RedisCache
+from core.cache import RedisCache
 from pydantic import ValidationError as PydanticValidationError
 import pandas as pd
 import numpy as np
 from fastapi import APIRouter
-from core.config import JWT_SECRET, ALGORITHM
+from core.schemas import PatientCreate, PatientUpdate, ImageCreate, ImageUpdate
+from auth import get_current_user
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
-app = FastAPI()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request, exc):
-    error_messages = [err['msg'] for err in exc.errors() if err['msg']]
-    if any("birthdate must be in format dd/mm/yyyy" in msg for msg in error_messages):
-        error_messages = ["birthdate must be in format dd/mm/yyyy"]
-    return JSONResponse(
-        status_code=400,
-        content={"detail": error_messages}
-    )
+# @router.exception_handler(RequestValidationError)
+# async def validation_exception_handler(request, exc):
+#     error_messages = [err['msg'] for err in exc.errors() if err['msg']]
+#     if any("birthdate must be in format dd/mm/yyyy" in msg for msg in error_messages):
+#         error_messages = ["birthdate must be in format dd/mm/yyyy"]
+#     return JSONResponse(
+#         status_code=400,
+#         content={"detail": error_messages}
+#     )
 
 
 
 REFERENCE_EXCEL = os.path.join(os.getenv("OUTPUT_DIR", "/tmp/patient_data"), "report_latest.xlsx")
 
-class PatientCreate(BaseModel):
-    name: Optional[str]
-    birthdate: Optional[str]
-    gender: Optional[str]
-    role: Optional[str]
-    work: Optional[str]
-    username: str
-    email: Optional[str]
-    password: str
 
-    @validator('birthdate', pre=True, always=True)
-    def validate_birthdate(cls, value):
-        if value:
-            try:
-                datetime.strptime(value, '%d/%m/%Y')
-            except ValueError:
-                raise ValueError("birthdate must be in format dd/mm/yyyy")
-        return value
 
-class PatientUpdate(BaseModel):
-    name: Optional[str]
-    birthdate: Optional[str] = Field(None, pattern=r'^\d{2}/\d{2}/\d{4}$')
-    gender: Optional[str]
-    role: Optional[str]
-    work: Optional[str]
-    email: Optional[str]
-
-    @validator('birthdate', pre=True, always=True)
-    def validate_birthdate(cls, value):
-        if value:
-            try:
-                datetime.strptime(value, '%d/%m/%Y')
-            except ValueError:
-                raise ValueError("birthdate must be in format dd/mm/yyyy")
-        return value
-
-class ImageCreate(BaseModel):
-    image_id: str
-    image: str  # URL or local path
-    diagnosis_score: float
-    comment: Optional[str]
-
-    @validator('image')
-    def validate_image(cls, value):
-        logger.info(f"Validating image: {value}")
-        try:
-            img = load_image(value)
-            if img is None:
-                raise ValueError(f"Image cannot be loaded from {value}. Please provide a valid URL or file path.")
-            return value
-        except Exception as e:
-            logger.error(f"Failed to validate image {value}: {str(e)}")
-            raise ValueError(f"Invalid image: {str(e)}")
-
-class ImageUpdate(BaseModel):
-    image: Optional[str]
-    diagnosis_score: Optional[float]
-    comment: Optional[str]
-
-    @validator('image', pre=True, always=True)
-    def validate_image(cls, value):
-        if value:
-            logger.info(f"Validating image: {value}")
-            try:
-                img = load_image(value)
-                if img is None:
-                    raise ValueError(f"Image cannot be loaded from {value}. Please provide a valid URL or file path.")
-                return value
-            except Exception as e:
-                logger.error(f"Failed to validate image {value}: {str(e)}")
-                raise ValueError(f"Invalid image: {str(e)}")
-        return value
-
-def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict:
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if not username:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        redis_cache = RedisCache()
-        user = redis_cache.get_cached_user(username)
-        if not user:
-            raise HTTPException(status_code=401, detail="User not found")
-        return user
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-@app.post("/patients", response_model=Dict)
+@router.post("/patients", response_model=Dict)
 async def create_patient(patient: PatientCreate):
     try:
         patient_data = patient.dict(exclude_unset=True)
@@ -154,7 +67,7 @@ async def create_patient(patient: PatientCreate):
         logger.error(f"Error creating patient: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/patients/{user_id}", response_model=Dict)
+@router.get("/patients/{user_id}", response_model=Dict)
 async def get_patient(user_id: str, current_user: Dict = Depends(get_current_user)):
     try:
         redis_cache = RedisCache()
@@ -169,7 +82,7 @@ async def get_patient(user_id: str, current_user: Dict = Depends(get_current_use
         logger.error(f"Error getting patient: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.put("/patients/{user_id}", response_model=Dict)
+@router.put("/patients/{user_id}", response_model=Dict)
 async def update_patient(user_id: str, patient: PatientUpdate, 
                         current_user: Dict = Depends(get_current_user)):
     try:
@@ -190,7 +103,7 @@ async def update_patient(user_id: str, patient: PatientUpdate,
         logger.error(f"Error updating patient: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.delete("/patients/{user_id}", response_model=Dict)
+@router.delete("/patients/{user_id}", response_model=Dict)
 async def delete_patient(user_id: str, current_user: Dict = Depends(get_current_user)):
     try:
         if current_user['role'] != 'admin':
@@ -204,7 +117,7 @@ async def delete_patient(user_id: str, current_user: Dict = Depends(get_current_
         logger.error(f"Error deleting patient: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/patients/{user_id}/history", response_model=Dict)
+@router.post("/patients/{user_id}/history", response_model=Dict)
 async def create_medical_history(user_id: str, image: ImageCreate, 
                                 current_user: Dict = Depends(get_current_user)):
     try:
@@ -260,7 +173,7 @@ async def create_medical_history(user_id: str, image: ImageCreate,
         logger.error(f"Error creating medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/patients/{user_id}/history", response_model=Dict)
+@router.get("/patients/{user_id}/history", response_model=Dict)
 async def get_medical_history(user_id: str, current_user: Dict = Depends(get_current_user)):
     try:
         if current_user['role'] != 'admin' and current_user['user_id'] != user_id:
@@ -275,7 +188,7 @@ async def get_medical_history(user_id: str, current_user: Dict = Depends(get_cur
         logger.error(f"Error getting medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.put("/patients/{user_id}/history", response_model=Dict)
+@router.put("/patients/{user_id}/history", response_model=Dict)
 async def update_medical_history(user_id: str, image: ImageUpdate, 
                                 current_user: Dict = Depends(get_current_user)):
     try:
@@ -348,7 +261,7 @@ async def update_medical_history(user_id: str, image: ImageUpdate,
         logger.error(f"Error updating medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.delete("/patients/{user_id}/history", response_model=Dict)
+@router.delete("/patients/{user_id}/history", response_model=Dict)
 async def delete_medical_history(user_id: str, current_user: Dict = Depends(get_current_user)):
     try:
         if current_user['role'] != 'admin':
@@ -368,7 +281,7 @@ if __name__ == "__main__":
     from redis.exceptions import ConnectionError as RedisConnectionError
     from unittest.mock import patch  # Add for mocking
 
-    client = TestClient(app)
+    client = TestClient(router)
     unique_id = str(uuid.uuid4())[:8]
     sample_patient = {
         'username': f'testuser_{unique_id}',

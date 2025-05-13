@@ -1,44 +1,65 @@
-import { useState } from 'react';
+"use client";
+
+import React, { useState } from 'react';
 import axios from 'axios';
 
-const ImageUploader = () => {
-  const [imageUrl, setImageUrl] = useState(null);
-  const [imageFile, setImageFile] = useState(null);
+const ImageUploader = ({ onUploadComplete }) => {
+  const [image, setImage] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [uploadedUrl, setUploadedUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  // Handle file selection
-  const handleFileChange = (event) => {
-    setImageFile(event.target.files[0]);
+  const handleImageChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setImage(file);
+      setPreviewUrl(URL.createObjectURL(file));
+    }
   };
 
-  // Upload to Imgur
-  const handleImageUpload = async () => {
-    if (!imageFile) return;
+  const handleUpload = async () => {
+    if (!image) return;
+    setLoading(true);
 
     const formData = new FormData();
-    formData.append('image', imageFile);
+    formData.append('image', image);
 
     try {
+      // 👉 Imgur example
       const response = await axios.post('https://api.imgur.com/3/image', formData, {
         headers: {
-          Authorization: `Client-ID 6352b06a8a2c101`, // Replace with your Imgur Client ID
+          Authorization: 'Client-ID 6352b06a8a2c101',
         },
       });
 
-      const imageUrl = response.data.data.link;
-      setImageUrl(imageUrl); // Store the URL in state or send to backend
-      console.log('Image uploaded successfully:', imageUrl);
+      const url = response.data.data.link;
+      setUploadedUrl(url);
+      onUploadComplete && onUploadComplete(url);
+
     } catch (error) {
-      console.error('Error uploading image:', error);
+      console.error('Upload failed:', error);
+      alert('Image upload failed');
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <div>
-      <input type="file" onChange={handleFileChange} />
-      <button onClick={handleImageUpload}>Upload Image</button>
-      {imageUrl && <img src={imageUrl} alt="Uploaded Image" />}
+      <input type="file" accept="image/*" onChange={handleImageChange} />
+      {previewUrl && <img src={previewUrl} alt="Preview" width={200} style={{ marginTop: '10px' }} />}
+      <button onClick={handleUpload} disabled={!image || loading} style={{ marginTop: '10px' }}>
+        {loading ? 'Uploading...' : 'Upload Image'}
+      </button>
+      {uploadedUrl && (
+        <div style={{ marginTop: '10px' }}>
+          <p>Image uploaded:</p>
+          <a href={uploadedUrl} target="_blank" rel="noopener noreferrer">{uploadedUrl}</a>
+        </div>
+      )}
     </div>
   );
 };
 
 export default ImageUploader;
+

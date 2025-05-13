@@ -1,5 +1,4 @@
-# backend/API/auth.py
-
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import ValidationError
@@ -9,12 +8,15 @@ import jwt
 from typing import Dict
 
 from core.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, REFERENCE_EXCEL
-from core.utils import hash_password, verify_password, fill_missing_data
+from core.utils import hash_password, verify_password
+from data_utils import fill_missing_data
 from core.cache import RedisCache
 from core.schemas import PatientCreate  # Or from wherever PatientCreate is defined
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 
 @router.post("/register", response_model=Dict)
@@ -58,3 +60,17 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     except Exception as e:
         logger.error(f"Unexpected error during login: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        redis_cache = RedisCache()
+        user = redis_cache.get_cached_user(username)
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        return user
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")

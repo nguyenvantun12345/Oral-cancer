@@ -4,7 +4,7 @@ from bson import ObjectId
 from pymongo import MongoClient
 from marshmallow import ValidationError
 from db_schema import PatientSchema, MedicalHistorySchema, get_collections
-from auth_utils import hash_password
+from core.utils import hash_password
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
