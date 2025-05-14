@@ -1,236 +1,167 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, validator
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, validator
 from typing import Dict, Optional
-from datetime import datetime, timedelta, timezone
-import jwt
+from datetime import datetime, timezone
 import logging
-import os
-from core.utils import hash_password, verify_password
-from core.checkquailty import process_multiple_images, load_image
-from solvequality import enhance_image
-from data_utils import fill_missing_data, aggregate_and_visualize
+from db_redis import RedisCache
+from api import get_current_user, PatientUpdate, validate_age
+from db_schema import PatientSchema, MedicalHistorySchema
 from marshmallow import ValidationError
-from core.cache import RedisCache
-from pydantic import ValidationError as PydanticValidationError
-import pandas as pd
-import numpy as np
-from fastapi import APIRouter
-from core.schemas import PatientCreate, PatientUpdate, ImageCreate, ImageUpdate
-from auth import get_current_user
 
-
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-router = APIRouter()
 
-# @router.exception_handler(RequestValidationError)
-# async def validation_exception_handler(request, exc):
-#     error_messages = [err['msg'] for err in exc.errors() if err['msg']]
-#     if any("birthdate must be in format dd/mm/yyyy" in msg for msg in error_messages):
-#         error_messages = ["birthdate must be in format dd/mm/yyyy"]
-#     return JSONResponse(
-#         status_code=400,
-#         content={"detail": error_messages}
-#     )
+router = APIRouter(prefix="/patients", tags=["Patient"])
 
+class ImageCreatePatient(BaseModel):
+    image: str
 
+    @validator('image')
+    def validate_image(cls, value):
+        from urllib.parse import urlparse
+        parsed = urlparse(value)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError("Image must be a valid URL")
+        return value
 
-REFERENCE_EXCEL = os.path.join(os.getenv("OUTPUT_DIR", "/tmp/patient_data"), "report_latest.xlsx")
+class ImageUpdatePatient(BaseModel):
+    image: Optional[str]
 
+    @validator('image', pre=True, always=True)
+    def validate_image(cls, value):
+        if value:
+            from urllib.parse import urlparse
+            parsed = urlparse(value)
+            if not parsed.scheme or not parsed.netloc:
+                raise ValueError("Image must be a valid URL")
+        return value
 
-
-@router.post("/patients", response_model=Dict)
-async def create_patient(patient: PatientCreate):
+@router.put("/me", response_model=Dict)
+async def update_current_patient(patient: PatientUpdate, current_user: Dict = Depends(get_current_user)):
     try:
+        if current_user['role'] != 'patient':
+            raise HTTPException(status_code=403, detail="Only patients can update their own data")
+
         patient_data = patient.dict(exclude_unset=True)
-        patient_data = fill_missing_data(patient_data, REFERENCE_EXCEL)
-        patient_data['password'] = hash_password(patient_data['password'])
-        patient_data['user_id'] = f"USR{int(datetime.now(timezone.utc).timestamp())}"
+        patient_schema = PatientSchema()
+        try:
+            patient_schema.load(patient_data, partial=True)
+        except ValidationError as ve:
+            raise HTTPException(status_code=400, detail=f"Invalid input: {ve.messages}. Please correct the data and try again.")
+
+        if 'birthdate' in patient_data and patient_data['birthdate']:
+            is_valid, error_message = validate_age(patient_data['birthdate'])
+            if not is_valid:
+                raise HTTPException(status_code=400, detail=f"Invalid birthdate: {error_message}. Please correct and try again.")
+
         redis_cache = RedisCache()
-        user_ids = redis_cache.create_patient([patient_data])
-        if not user_ids:
-            raise HTTPException(status_code=400, detail="Failed to create patient")
-        patients = redis_cache.search_patients("", limit=100)
-        report = aggregate_and_visualize(patients, f"patient_create_{patient_data['user_id']}")
-        logger.info(f"Created patient: {patient_data['username']}")
-        return {**patient_data, "outlier_report": report}
-    except (ValidationError, PydanticValidationError) as ve:
-        error_messages = (
-            ve.messages if isinstance(ve, ValidationError)
-            else [err['msg'] for err in ve.errors() if err['msg']] or ["Invalid input"]
+        if not redis_cache.update_patient(current_user['user_id'], patient_data):
+            raise HTTPException(status_code=404, detail="Patient not found")
+
+        updated_patient = redis_cache.get_patient_by_id(current_user['user_id'])
+        redis_cache.log_audit(
+            action="update_patient",
+            user_id=current_user['user_id'],
+            details={"user_id": current_user['user_id']}
         )
-        if any("birthdate must be in format dd/mm/yyyy" in msg for msg in error_messages):
-            error_messages = ["birthdate must be in format dd/mm/yyyy"]
-        raise HTTPException(status_code=400, detail=error_messages)
-    except Exception as e:
-        logger.error(f"Error creating patient: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/patients/{user_id}", response_model=Dict)
-async def get_patient(user_id: str, current_user: Dict = Depends(get_current_user)):
-    try:
-        redis_cache = RedisCache()
-        patient = redis_cache.get_patient_by_id(user_id)
-        if not patient:
-            raise HTTPException(status_code=404, detail="Patient not found")
-        if current_user['role'] != 'admin' and current_user['user_id'] != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
-        logger.info(f"Retrieved patient: {user_id}")
-        return patient
-    except Exception as e:
-        logger.error(f"Error getting patient: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.put("/patients/{user_id}", response_model=Dict)
-async def update_patient(user_id: str, patient: PatientUpdate, 
-                        current_user: Dict = Depends(get_current_user)):
-    try:
-        if current_user['role'] != 'admin' and current_user['user_id'] != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
-        patient_data = patient.dict(exclude_unset=True)
-        patient_data = fill_missing_data(patient_data, REFERENCE_EXCEL)
-        redis_cache = RedisCache()
-        if not redis_cache.update_patient(user_id, patient_data):
-            raise HTTPException(status_code=404, detail="Patient not found")
-        patients = redis_cache.search_patients("", limit=100)
-        report = aggregate_and_visualize(patients, f"patient_update_{user_id}")
-        logger.info(f"Updated patient: {user_id}")
-        return {**patient_data, "outlier_report": report}
-    except ValidationError as ve:
-        raise HTTPException(status_code=400, detail=ve.messages)
+        logger.info(f"Updated patient: {current_user['user_id']}")
+        return updated_patient
+    except HTTPException as he:
+        logger.error(f"HTTP error updating patient: {he.detail}")
+        raise
     except Exception as e:
         logger.error(f"Error updating patient: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/patients/{user_id}", response_model=Dict)
-async def delete_patient(user_id: str, current_user: Dict = Depends(get_current_user)):
+@router.post("/me/history", response_model=Dict)
+async def create_current_medical_history(image: ImageCreatePatient, 
+                                        current_user: Dict = Depends(get_current_user)):
     try:
-        if current_user['role'] != 'admin':
-            raise HTTPException(status_code=403, detail="Not authorized")
-        redis_cache = RedisCache()
-        if not redis_cache.delete_patient(user_id):
-            raise HTTPException(status_code=404, detail="Patient not found")
-        logger.info(f"Deleted patient: {user_id}")
-        return {"message": "Patient deleted"}
-    except Exception as e:
-        logger.error(f"Error deleting patient: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if current_user['role'] != 'patient':
+            raise HTTPException(status_code=403, detail="Only patients can manage their own data")
 
-@router.post("/patients/{user_id}/history", response_model=Dict)
-async def create_medical_history(user_id: str, image: ImageCreate, 
-                                current_user: Dict = Depends(get_current_user)):
-    try:
-        if current_user['role'] != 'admin' and current_user['user_id'] != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
         image_data = image.dict()
-        image_data['user_id'] = user_id
-        
-        # Validate and load image
-        logger.info(f"Attempting to load image: {image_data['image']}")
-        img = load_image(image_data['image'])
-        if img is None:
-            logger.error(f"Image loading failed for {image_data['image']}")
-            raise HTTPException(status_code=400, detail=f"Failed to load image from {image_data['image']}")
+        image_data['user_id'] = current_user['user_id']
+        image_data['comment'] = None
+        image_data['diagnosis_score'] = None
 
-        logger.info(f"Processing image: {image_data['image']}")
-        quality_result = process_multiple_images([image_data['image']])
-        if not quality_result or not quality_result.values():
-            logger.error(f"Image quality evaluation failed for {image_data['image']}")
-            raise HTTPException(status_code=400, detail="Failed to evaluate image quality")
-        quality_result = list(quality_result.values())[0]
-        
-        if quality_result.loc['Deviation'].sum() > 0:
-            logger.info(f"Image {image_data['image_id']} does not meet quality standards, enhancing...")
-            enhanced_image = enhance_image(image_data['image'])
-            if not enhanced_image or 'output_path' not in enhanced_image:
-                logger.error(f"Image enhancement failed for {image_data['image']}")
-                raise HTTPException(status_code=400, detail="Image enhancement failed")
-            image_data['image'] = enhanced_image['output_path']
-            logger.info(f"Re-processing enhanced image: {image_data['image']}")
-            quality_result = process_multiple_images([image_data['image']])
-            if not quality_result or not quality_result.values():
-                logger.error(f"Enhanced image quality evaluation failed for {image_data['image']}")
-                raise HTTPException(status_code=400, detail="Failed to evaluate enhanced image quality")
-            quality_result = list(quality_result.values())[0]
-            if quality_result.loc['Deviation'].sum() > 0:
-                logger.error(f"Enhanced image quality still below standards for {image_data['image']}")
-                raise HTTPException(status_code=400, detail="Image quality still below standards after enhancement")
+        medical_schema = MedicalHistorySchema()
+        try:
+            validated_data = medical_schema.load(image_data, partial=True)
+        except ValidationError as ve:
+            raise HTTPException(status_code=400, detail=f"Invalid medical history data: {ve.messages}. Please correct the data and try again.")
 
         redis_cache = RedisCache()
-        image_data['quality_report'] = quality_result.to_dict()
-        # Add the date field manually as a list of ISO strings to avoid serialization issues
-        image_data['date'] = [datetime.now(timezone.utc).isoformat()]
-        if not redis_cache.create_medical_history(image_data):
-            logger.error(f"Failed to add medical history for user_id {user_id}")
+        validated_data['date'] = [datetime.now(timezone.utc).isoformat()]
+        if not redis_cache.create_medical_history(validated_data):
             raise HTTPException(status_code=400, detail="Failed to add medical history")
-        logger.info(f"Created medical history {image_data['image_id']} for patient {user_id}")
-        return image_data
+
+        redis_cache.log_audit(
+            action="create_medical_history",
+            user_id=current_user['user_id'],
+            details={"user_id": current_user['user_id'], "image_id": validated_data['image_id']}
+        )
+
+        logger.info(f"Created medical history {validated_data['image_id']} for patient {current_user['user_id']}")
+        return validated_data
     except HTTPException as he:
-        logger.error(f"HTTP error creating medical history: {str(he.detail)}")
+        logger.error(f"HTTP error creating medical history: {he.detail}")
         raise
     except Exception as e:
         logger.error(f"Error creating medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/patients/{user_id}/history", response_model=Dict)
-async def get_medical_history(user_id: str, current_user: Dict = Depends(get_current_user)):
+@router.get("/me/history", response_model=Dict)
+async def get_current_medical_history(current_user: Dict = Depends(get_current_user)):
     try:
-        if current_user['role'] != 'admin' and current_user['user_id'] != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
+        if current_user['role'] != 'patient':
+            raise HTTPException(status_code=403, detail="Only patients can view their own data")
+
         redis_cache = RedisCache()
-        history = redis_cache.get_medical_history(user_id)
+        history = redis_cache.get_medical_history(current_user['user_id'])
         if not history:
             raise HTTPException(status_code=404, detail="Medical history not found")
-        logger.info(f"Retrieved medical history for patient: {user_id}")
+
+        redis_cache.log_audit(
+            action="view_medical_history",
+            user_id=current_user['user_id'],
+            details={"user_id": current_user['user_id']}
+        )
+
+        logger.info(f"Retrieved medical history for patient: {current_user['user_id']}")
         return history
+    except HTTPException as he:
+        logger.error(f"HTTP error getting medical history: {he.detail}")
+        raise
     except Exception as e:
         logger.error(f"Error getting medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.put("/patients/{user_id}/history", response_model=Dict)
-async def update_medical_history(user_id: str, image: ImageUpdate, 
-                                current_user: Dict = Depends(get_current_user)):
+@router.put("/me/history", response_model=Dict)
+async def update_current_medical_history(image: ImageUpdatePatient, 
+                                        current_user: Dict = Depends(get_current_user)):
     try:
-        if current_user['role'] != 'admin' and current_user['user_id'] != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
+        if current_user['role'] != 'patient':
+            raise HTTPException(status_code=403, detail="Only patients can manage their own data")
+
         image_data = image.dict(exclude_unset=True)
-        if 'image' in image_data:
-            logger.info(f"Attempting to load image: {image_data['image']}")
-            img = load_image(image_data['image'])
-            if img is None:
-                logger.error(f"Image loading failed for {image_data['image']}")
-                raise HTTPException(status_code=400, detail=f"Failed to load image from {image_data['image']}")
-            logger.info(f"Processing image: {image_data['image']}")
-            quality_result = process_multiple_images([image_data['image']])
-            if not quality_result or not quality_result.values():
-                logger.error(f"Image quality evaluation failed for {image_data['image']}")
-                raise HTTPException(status_code=400, detail="Failed to evaluate image quality")
-            quality_result = list(quality_result.values())[0]
-            if quality_result.loc['Deviation'].sum() > 0:
-                logger.info(f"Image for user_id {user_id} does not meet quality standards, enhancing...")
-                enhanced_image = enhance_image(image_data['image'])
-                if not enhanced_image or 'output_path' not in enhanced_image:
-                    logger.error(f"Image enhancement failed for {image_data['image']}")
-                    raise HTTPException(status_code=400, detail="Image enhancement failed")
-                image_data['image'] = enhanced_image['output_path']
-                logger.info(f"Re-processing enhanced image: {image_data['image']}")
-                quality_result = process_multiple_images([image_data['image']])
-                if not quality_result or not quality_result.values():
-                    logger.error(f"Enhanced image quality evaluation failed for {image_data['image']}")
-                    raise HTTPException(status_code=400, detail="Failed to evaluate enhanced image quality")
-                quality_result = list(quality_result.values())[0]
-                if quality_result.loc['Deviation'].sum() > 0:
-                    logger.error(f"Enhanced image quality still below standards for {image_data['image']}")
-                    raise HTTPException(status_code=400, detail="Image quality still below standards after enhancement")
-                image_data['quality_report'] = quality_result.to_dict()
+        image_data['comment'] = None
+        image_data['diagnosis_score'] = None
+
+        medical_schema = MedicalHistorySchema()
+        try:
+            medical_schema.load(image_data, partial=True)
+        except ValidationError as ve:
+            raise HTTPException(status_code=400, detail=f"Invalid medical history data: {ve.messages}. Please correct the data and try again.")
+
         redis_cache = RedisCache()
-        existing_history = redis_cache.get_medical_history(user_id)
+        existing_history = redis_cache.get_medical_history(current_user['user_id'])
         if not existing_history:
             raise HTTPException(status_code=404, detail="Medical history not found")
-        image_data['user_id'] = user_id
+
+        image_data['user_id'] = current_user['user_id']
         image_data['image_id'] = existing_history['image_id']
-        # Convert existing dates to ISO strings
         existing_dates = existing_history.get('date', [])
         if existing_dates:
             existing_dates = [
@@ -240,10 +171,200 @@ async def update_medical_history(user_id: str, image: ImageUpdate,
         else:
             existing_dates = []
         image_data['date'] = existing_dates + [datetime.now(timezone.utc).isoformat()]
-        if not redis_cache.update_medical_history(user_id, image_data):
-            logger.error(f"Failed to update medical history for user_id {user_id}")
+
+        if not redis_cache.update_medical_history(current_user['user_id'], image_data):
             raise HTTPException(status_code=400, detail="Failed to update medical history")
-        # Fetch the updated history and ensure datetime is converted to ISO string
+
+        updated_history = redis_cache.get_medical_history(current_user['user_id'])
+        if 'date' in updated_history and updated_history['date']:
+            updated_history['date'] = [
+                d.isoformat() if isinstance(d, datetime) else d
+                for d in updated_history['date']
+            ]
+        else:
+            updated_history['date'] = []
+
+        redis_cache.log_audit(
+            action="update_medical_history",
+            user_id=current_user['user_id'],
+            details={"user_id": current_user['user_id'], "image_id": image_data['image_id']}
+        )
+
+        logger.info(f"Updated medical history for patient {current_user['user_id']}")
+        return updated_history
+    except HTTPException as he:
+        logger.error(f"HTTP error updating medical history: {he.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"Error updating medical history: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/get/{user_id}", response_model=Dict)
+async def get_patient(user_id: str, current_user: Dict = Depends(get_current_user)):
+    try:
+        if current_user['role'] == 'patient' and current_user['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Patients can only view their own data")
+
+        redis_cache = RedisCache()
+        patient = redis_cache.get_patient_by_id(user_id)
+        if not patient:
+            raise HTTPException(status_code=404, detail="Patient not found")
+
+        redis_cache.log_audit(
+            action="view_patient",
+            user_id=current_user['user_id'],
+            details={"viewed_user_id": user_id}
+        )
+
+        logger.info(f"Retrieved patient: {user_id}")
+        return patient
+    except HTTPException as he:
+        logger.error(f"HTTP error getting patient: {he.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"Error getting patient: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/update/{user_id}", response_model=Dict)
+async def update_patient(user_id: str, patient: PatientUpdate, 
+                        current_user: Dict = Depends(get_current_user)):
+    try:
+        if current_user['role'] == 'patient' and current_user['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Patients can only update their own data")
+
+        patient_data = patient.dict(exclude_unset=True)
+        patient_schema = PatientSchema()
+        try:
+            patient_schema.load(patient_data, partial=True)
+        except ValidationError as ve:
+            raise HTTPException(status_code=400, detail=f"Invalid input: {ve.messages}. Please correct the data and try again.")
+
+        if 'birthdate' in patient_data and patient_data['birthdate']:
+            is_valid, error_message = validate_age(patient_data['birthdate'])
+            if not is_valid:
+                raise HTTPException(status_code=400, detail=f"Invalid birthdate: {error_message}. Please correct and try again.")
+
+        redis_cache = RedisCache()
+        if not redis_cache.update_patient(user_id, patient_data):
+            raise HTTPException(status_code=404, detail="Patient not found")
+
+        updated_patient = redis_cache.get_patient_by_id(user_id)
+        redis_cache.log_audit(
+            action="update_patient",
+            user_id=current_user['user_id'],
+            details={"user_id": user_id}
+        )
+
+        logger.info(f"Updated patient: {user_id}")
+        return updated_patient
+    except HTTPException as he:
+        logger.error(f"HTTP error updating patient: {he.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"Error updating patient: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{user_id}/history", response_model=Dict)
+async def create_medical_history(user_id: str, image: ImageCreatePatient, 
+                                current_user: Dict = Depends(get_current_user)):
+    try:
+        if current_user['role'] == 'patient' and current_user['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Patients can only manage their own data")
+
+        image_data = image.dict()
+        image_data['user_id'] = user_id
+        image_data['comment'] = None
+        image_data['diagnosis_score'] = None
+
+        medical_schema = MedicalHistorySchema()
+        try:
+            validated_data = medical_schema.load(image_data, partial=True)
+        except ValidationError as ve:
+            raise HTTPException(status_code=400, detail=f"Invalid medical history data: {ve.messages}. Please correct the data and try again.")
+
+        redis_cache = RedisCache()
+        validated_data['date'] = [datetime.now(timezone.utc).isoformat()]
+        if not redis_cache.create_medical_history(validated_data):
+            raise HTTPException(status_code=400, detail="Failed to add medical history")
+
+        redis_cache.log_audit(
+            action="create_medical_history",
+            user_id=current_user['user_id'],
+            details={"user_id": user_id, "image_id": validated_data['image_id']}
+        )
+
+        logger.info(f"Created medical history {validated_data['image_id']} for patient {user_id}")
+        return validated_data
+    except HTTPException as he:
+        logger.error(f"HTTP error creating medical history: {he.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"Error creating medical history: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{user_id}/history", response_model=Dict)
+async def get_medical_history(user_id: str, current_user: Dict = Depends(get_current_user)):
+    try:
+        if current_user['role'] == 'patient' and current_user['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Patients can only view their own data")
+
+        redis_cache = RedisCache()
+        history = redis_cache.get_medical_history(user_id)
+        if not history:
+            raise HTTPException(status_code=404, detail="Medical history not found")
+
+        redis_cache.log_audit(
+            action="view_medical_history",
+            user_id=current_user['user_id'],
+            details={"user_id": user_id}
+        )
+
+        logger.info(f"Retrieved medical history for patient: {user_id}")
+        return history
+    except HTTPException as he:
+        logger.error(f"HTTP error getting medical history: {he.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"Error getting medical history: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/{user_id}/history", response_model=Dict)
+async def update_medical_history(user_id: str, image: ImageUpdatePatient, 
+                                current_user: Dict = Depends(get_current_user)):
+    try:
+        if current_user['role'] == 'patient' and current_user['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Patients can only manage their own data")
+
+        image_data = image.dict(exclude_unset=True)
+        image_data['comment'] = None
+        image_data['diagnosis_score'] = None
+
+        medical_schema = MedicalHistorySchema()
+        try:
+            medical_schema.load(image_data, partial=True)
+        except ValidationError as ve:
+            raise HTTPException(status_code=400, detail=f"Invalid medical history data: {ve.messages}. Please correct the data and try again.")
+
+        redis_cache = RedisCache()
+        existing_history = redis_cache.get_medical_history(user_id)
+        if not existing_history:
+            raise HTTPException(status_code=404, detail="Medical history not found")
+
+        image_data['user_id'] = user_id
+        image_data['image_id'] = existing_history['image_id']
+        existing_dates = existing_history.get('date', [])
+        if existing_dates:
+            existing_dates = [
+                d.isoformat() if isinstance(d, datetime) else d
+                for d in existing_dates
+            ]
+        else:
+            existing_dates = []
+        image_data['date'] = existing_dates + [datetime.now(timezone.utc).isoformat()]
+
+        if not redis_cache.update_medical_history(user_id, image_data):
+            raise HTTPException(status_code=400, detail="Failed to update medical history")
+
         updated_history = redis_cache.get_medical_history(user_id)
         if 'date' in updated_history and updated_history['date']:
             updated_history['date'] = [
@@ -252,276 +373,18 @@ async def update_medical_history(user_id: str, image: ImageUpdate,
             ]
         else:
             updated_history['date'] = []
+
+        redis_cache.log_audit(
+            action="update_medical_history",
+            user_id=current_user['user_id'],
+            details={"user_id": user_id, "image_id": image_data['image_id']}
+        )
+
         logger.info(f"Updated medical history for patient {user_id}")
         return updated_history
     except HTTPException as he:
-        logger.error(f"HTTP error updating medical history: {str(he.detail)}")
+        logger.error(f"HTTP error updating medical history: {he.detail}")
         raise
     except Exception as e:
         logger.error(f"Error updating medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-@router.delete("/patients/{user_id}/history", response_model=Dict)
-async def delete_medical_history(user_id: str, current_user: Dict = Depends(get_current_user)):
-    try:
-        if current_user['role'] != 'admin':
-            raise HTTPException(status_code=403, detail="Not authorized")
-        redis_cache = RedisCache()
-        if not redis_cache.delete_medical_history(user_id):
-            raise HTTPException(status_code=404, detail="Medical history not found")
-        logger.info(f"Deleted medical history for patient {user_id}")
-        return {"message": "Medical history deleted"}
-    except Exception as e:
-        logger.error(f"Error deleting medical history: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    from fastapi.testclient import TestClient
-    import uuid
-    from redis.exceptions import ConnectionError as RedisConnectionError
-    from unittest.mock import patch  # Add for mocking
-
-    client = TestClient(router)
-    unique_id = str(uuid.uuid4())[:8]
-    sample_patient = {
-        'username': f'testuser_{unique_id}',
-        'password': 'testpassword',
-        'name': 'Test User',
-        'birthdate': '01/01/1990',
-        'gender': 'male',
-        'role': 'patient',
-        'work': 'Engineer',
-        'email': f'test_{unique_id}@example.com'
-    }
-    sample_medical_history = {
-        'image_id': f'img_{unique_id}',
-        'image': 'https://d1hjkbq40fs2x4.cloudfront.net/2016-01-31/files/1045.jpg',
-        'diagnosis_score': 0.85,
-        'comment': 'Test medical history'
-    }
-
-    redis_cache = None
-    try:
-        redis_cache = RedisCache(ttl_seconds=3600)
-    except RedisConnectionError as e:
-        print(f"Không thể kết nối Redis: {str(e)}. Thoát test.")
-        exit(1)
-    except Exception as e:
-        print(f"Lỗi khởi tạo RedisCache: {str(e)}. Thoát test.")
-        exit(1)
-
-    def cleanup(user_id):
-        try:
-            redis_cache.delete_patient(user_id)
-            redis_cache.delete_medical_history(user_id)
-            redis_cache.invalidate_cache(f"user:*{user_id}*")
-            redis_cache.invalidate_cache(f"patient:{user_id}")
-            redis_cache.invalidate_cache(f"medical:{user_id}:*")
-            print(f"Đã dọn dẹp dữ liệu cho user_id {user_id}")
-        except Exception as e:
-            print(f"Lỗi khi dọn dẹp: {str(e)}")
-            
-####################################### TEST ###############################################
-
-    print("Test 1: Đăng ký tài khoản mới")
-    try:
-        response = client.post("/register", json=sample_patient)
-        assert response.status_code == 200
-        assert response.json()['username'] == sample_patient['username']
-        assert response.json()['message'] == "User registered"
-        print("Test 1 passed")
-    except Exception as e:
-        print(f"Test 1 failed: {str(e)}")
-        cleanup(sample_patient.get('user_id', f"USR{int(datetime.now(timezone.utc).timestamp())}"))
-        exit(1)
-
-    print("Test 2: Đăng ký với email không hợp lệ")
-    try:
-        invalid_patient = sample_patient.copy()
-        invalid_patient['email'] = 'invalid_email'
-        invalid_patient['username'] = f'invaliduser_{unique_id}'
-        response = client.post("/register", json=invalid_patient)
-        assert response.status_code == 400
-        print("Test 2 passed")
-    except Exception as e:
-        print(f"Test 2 failed: {str(e)}")
-        cleanup(f"USR{int(datetime.now(timezone.utc).timestamp())}")
-        exit(1)
-
-    print("Test 3: Đăng nhập thành công")
-    try:
-        login_data = {
-            'username': sample_patient['username'],
-            'password': sample_patient['password']
-        }
-        response = client.post("/login", data=login_data)
-        assert response.status_code == 200
-        assert 'access_token' in response.json()
-        assert response.json()['token_type'] == 'bearer'
-        token = response.json()['access_token']
-        print("Test 3 passed")
-    except Exception as e:
-        print(f"Test 3 failed: {str(e)}")
-        cleanup(sample_patient.get('user_id', f"USR{int(datetime.now(timezone.utc).timestamp())}"))
-        exit(1)
-
-    print("Test 4: Đăng nhập với thông tin sai")
-    try:
-        login_data = {
-            'username': sample_patient['username'],
-            'password': 'wrongpassword'
-        }
-        response = client.post("/login", data=login_data)
-        assert response.status_code == 401
-        assert response.json()['detail'] == "Invalid credentials"
-        print("Test 4 passed")
-    except Exception as e:
-        print(f"Test 4 failed: {str(e)}")
-        cleanup(sample_patient.get('user_id', f"USR{int(datetime.now(timezone.utc).timestamp())}"))
-        exit(1)
-
-    print("Test 5: Tạo bệnh nhân mới")
-    try:
-        headers = {"Authorization": f"Bearer {token}"}
-        response = client.post("/patients", json=sample_patient, headers=headers)
-        assert response.status_code == 200
-        assert response.json()['username'] == sample_patient['username']
-        assert 'outlier_report' in response.json()
-        user_id = response.json()['user_id']
-        print("Test 5 passed")
-    except Exception as e:
-        print(f"Test 5 failed: {str(e)}")
-        cleanup(sample_patient.get('user_id', f"USR{int(datetime.now(timezone.utc).timestamp())}"))
-        exit(1)
-
-    print("Test 6: Tạo bệnh nhân với birthdate không hợp lệ")
-    try:
-        invalid_patient = sample_patient.copy()
-        invalid_patient['birthdate'] = '2025-01-01'
-        headers = {"Authorization": f"Bearer {token}"}
-        response = client.post("/patients", json=invalid_patient, headers=headers)
-        print(f"Response: {response.status_code} {response.json()}")
-        assert response.status_code == 400
-        print("Test 6 passed")
-    except Exception as e:
-        print(f"Test 6 failed: {str(e)}")
-        cleanup(user_id)
-        exit(1)
-
-    print("Test 7: Lấy thông tin bệnh nhân")
-    try:
-        headers = {"Authorization": f"Bearer {token}"}
-        response = client.get(f"/patients/{user_id}", headers=headers)
-        assert response.status_code == 200
-        assert response.json()['username'] == sample_patient['username']
-        print("Test 7 passed")
-    except Exception as e:
-        print(f"Test 7 failed: {str(e)}")
-        cleanup(user_id)
-        exit(1)
-
-    print("Test 8: Cập nhật thông tin bệnh nhân")
-    try:
-        update_data = {'name': 'Updated User'}
-        headers = {"Authorization": f"Bearer {token}"}
-        response = client.put(f"/patients/{user_id}", json=update_data, headers=headers)
-        assert response.status_code == 200
-        assert response.json()['name'] == 'Updated User'
-        print("Test 8 passed")
-    except Exception as e:
-        print(f"Test 8 failed: {str(e)}")
-        cleanup(user_id)
-        exit(1)
-
-    print("Test 9: Tạo lịch sử y tế")
-    try:
-        headers = {"Authorization": f"Bearer {token}"}
-        # Mock process_multiple_images to return a valid quality_result
-        mock_quality_result = pd.DataFrame({
-            'Metric': ['Brightness', 'Contrast', 'Noise'],
-            'Value': [100, 50, 10],
-            'Deviation': [0, 0, 0]
-        }).set_index('Metric')
-        with patch('checkquailty.process_multiple_images', return_value={'image1': mock_quality_result}):
-            response = client.post(f"/patients/{user_id}/history", json=sample_medical_history, headers=headers)
-        assert response.status_code == 200
-        assert response.json()['image_id'] == sample_medical_history['image_id']
-        print("Test 9 passed")
-    except Exception as e:
-        print(f"Test 9 failed: {str(e)}")
-        cleanup(user_id)
-        exit(1)
-
-    print("Test 10: Lấy lịch sử y tế")
-    try:
-        headers = {"Authorization": f"Bearer {token}"}
-        response = client.get(f"/patients/{user_id}/history", headers=headers)
-        assert response.status_code == 200
-        assert response.json()['image_id'] == sample_medical_history['image_id']
-        print("Test 10 passed")
-    except Exception as e:
-        print(f"Test 10 failed: {str(e)}")
-        cleanup(user_id)
-        exit(1)
-
-    print("Test 11: Cập nhật lịch sử y tế")
-    try:
-        # Update sample_medical_history with the correct user_id
-        sample_medical_history['user_id'] = user_id
-        update_medical = {'diagnosis_score': 0.9}
-        headers = {"Authorization": f"Bearer {token}"}
-        # Mock process_multiple_images to return a valid quality_result for the POST request
-        mock_quality_result = pd.DataFrame({
-            'Metric': ['Brightness', 'Contrast', 'Noise'],
-            'Value': [100, 50, 10],
-            'Deviation': [0, 0, 0]
-        }).set_index('Metric')
-        with patch('checkquailty.process_multiple_images', return_value={'image1': mock_quality_result}):
-            # Delete existing medical history to avoid unique index violation
-            redis_cache.delete_medical_history(user_id)
-            response = client.post(f"/patients/{user_id}/history", json=sample_medical_history, headers=headers)
-            assert response.status_code == 200, f"Failed to create medical history: {response.json()}"
-        response = client.put(f"/patients/{user_id}/history", json=update_medical, headers=headers)
-        assert response.status_code == 200
-        assert response.json()['diagnosis_score'] == 0.9
-        print("Test 11 passed")
-    except Exception as e:
-        print(f"Test 11 failed: {str(e)}")
-        cleanup(user_id)
-        exit(1)
-
-    print("Test 12: Xóa lịch sử y tế")
-    try:
-        admin_patient = sample_patient.copy()
-        admin_patient['username'] = f'admin_{unique_id}'
-        admin_patient['email'] = f'admin_{unique_id}@example.com'
-        admin_patient['role'] = 'admin'
-        admin_response = client.post("/register", json=admin_patient)
-        admin_login = {'username': admin_patient['username'], 'password': admin_patient['password']}
-        admin_token_response = client.post("/login", data=admin_login)
-        admin_token = admin_token_response.json()['access_token']
-        headers = {"Authorization": f"Bearer {admin_token}"}
-        response = client.delete(f"/patients/{user_id}/history", headers=headers)
-        assert response.status_code == 200
-        assert response.json()['message'] == "Medical history deleted"
-        print("Test 12 passed")
-        cleanup(admin_response.json().get('user_id', f"USR{int(datetime.now(timezone.utc).timestamp())}"))
-    except Exception as e:
-        print(f"Test 12 failed: {str(e)}")
-        cleanup(user_id)
-        exit(1)
-
-    print("Test 13: Xóa bệnh nhân")
-    try:
-        headers = {"Authorization": f"Bearer {admin_token}"}
-        response = client.delete(f"/patients/{user_id}", headers=headers)
-        assert response.status_code == 200
-        assert response.json()['message'] == "Patient deleted"
-        print("Test 13 passed")
-    except Exception as e:
-        print(f"Test 13 failed: {str(e)}")
-        cleanup(user_id)
-        exit(1)
-
-    cleanup(user_id)
-    print("All tests completed!")

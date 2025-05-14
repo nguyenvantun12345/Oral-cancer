@@ -3,7 +3,7 @@ from airflow.operators.python import PythonOperator
 from datetime import datetime
 from pendulum import today
 from db_query import Patient, MedicalHistoryCRUD
-from backend.API.core.cache import RedisCache
+from db_redis import RedisCache
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt

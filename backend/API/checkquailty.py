@@ -13,23 +13,6 @@ Tương phản (độ lệch chuẩn): >= 15
 Độ sáng: > 20 và <= 235
 Chênh lệch màu: <= 60
 """
-def load_image(image_input):
-    """Tải ảnh từ URL hoặc đường dẫn cục bộ."""
-    try:
-        if image_input.startswith(('http://', 'https://')):
-            response = requests.get(image_input, timeout=10)
-            response.raise_for_status()
-            img_array = np.frombuffer(response.content, np.uint8)
-            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        else:
-            img = cv2.imread(image_input)
-        if img is None:
-            raise ValueError(f"Failed to load image: {image_input}")
-        return img
-    except Exception as e:
-        print(f"Error loading image {image_input}: {str(e)}")
-        return None
-
 def cal_brightness_contrast(image):
     img = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     brightness = np.mean(img)
@@ -99,7 +82,25 @@ def evaluate_image_parallel(image):
     except Exception as e:
         print(f"Lỗi khi xử lý ảnh: {e}")
         return None
-
+def load_image(image_input):
+    """Tải ảnh từ URL hoặc đường dẫn cục bộ và chuyển về JPEG."""
+    try:
+        if image_input.startswith(('http://', 'https://')):
+            response = requests.get(image_input, timeout=10)
+            response.raise_for_status()
+            img_array = np.frombuffer(response.content, np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        else:
+            img = cv2.imread(image_input)
+        if img is None:
+            raise ValueError(f"Failed to load image: {image_input}")
+        # Chuyển đổi về JPEG
+        _, buffer = cv2.imencode('.jpeg', img)
+        img = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+        return img
+    except Exception as e:
+        print(f"Error loading image {image_input}: {str(e)}")
+        return None
 def process_multiple_images(image_paths):
     results = {}
     
@@ -112,7 +113,7 @@ def process_multiple_images(image_paths):
         return results
     
     # Xử lý song song cho mỗi ảnh
-    with ThreadPoolExecutor(max_workers=min(len(valid_images), 8)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(valid_images), 16)) as executor:
         futures = {executor.submit(evaluate_image_parallel, img): path for path, img in valid_images.items()}
         
         for future in futures:
@@ -141,10 +142,3 @@ def print_detailed_assessment(df):
     print("\nChi tiết đánh giá:")
     for criterion, status in criteria.items():
         print(f"- {criterion}: {status}")
-
-if __name__ == "__main__":
-    image_paths = ["enhanced_dog1.webp", "dog2.webp", "dog1.webp"]
-    results = process_multiple_images(image_paths)
-    for path, df in results.items():
-        print(f"\nKết quả đánh giá cho ảnh: {path}")
-        print(df)
