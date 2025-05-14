@@ -5,16 +5,21 @@ import { useState, useEffect } from 'react';
 
 export default function Navbar() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Simulated auth check — replace with real JWT/localStorage/etc.
   useEffect(() => {
     const token = localStorage.getItem('token');
+    const role = localStorage.getItem('role'); // Assuming the role is stored in localStorage
     setIsLoggedIn(!!token);
+    setIsAdmin(role === 'admin');
   }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('role');
     setIsLoggedIn(false);
+    setIsAdmin(false);
     // Redirect or reload if needed
   };
 
@@ -27,6 +32,7 @@ export default function Navbar() {
           <>
             <Link href="/image-history">History</Link>
             <Link href="/profile">Profile</Link>
+            {isAdmin && <Link href="/admin">Admin</Link>}  {/* Admin link */}
             <button onClick={handleLogout}>Logout</button>
           </>
         ) : (
