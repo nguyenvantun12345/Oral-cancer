@@ -4,20 +4,29 @@ import Layout from '../components/Layout';
 import ImageUploader from '../components/ImageUploader';
 import './globals.css'; // Import your CSS file
 
-const Home = () => {
-  const handleUploadComplete = (url) => {
-    console.log('Uploaded image URL:', url);
-    // You can send the URL to your backend for analysis if needed
-  };
+import React from 'react';
+import ObjectRecognizer from '../components/ObjectRecognizer'; // Import the component
 
+// Assuming you might have Header and Footer components in separate files too
+// import YourHeaderComponent from './YourHeaderComponent';
+// import YourFooterComponent from './YourFooterComponent';
+
+// App component to render the ObjectRecognizer.
+// This is your main application entry point or a page component.
+export default function App() {
   return (
+    // It's common to have a root div for the entire app or page
+    // Global styles like background color or min-height can be applied here
+    // or in your main CSS/Tailwind setup.
     <Layout>
-      <div className="center-container">
-        <h1>Upload an Image for Oral Cancer Diagnosis</h1>
-        <ImageUploader onUploadComplete={handleUploadComplete} />
+      <div className="min-h-screen bg-gray-100">
+        <main>
+          <ObjectRecognizer />
+        </main>
+
+        {/* <YourFooterComponent /> */}
       </div>
     </Layout>
   );
-};
+}
 
-export default Home;
