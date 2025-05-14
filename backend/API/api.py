@@ -106,7 +106,7 @@ async def register(patient: PatientCreate):
         patient_data['role'] = 'patient'
         patient_schema = PatientSchema()
         try:
-            validated_data = patient_schema.load(patient_data, partial=True)
+            validated_data = patient_schema.load(patient_data)
         except ValidationError as ve:
             raise HTTPException(status_code=400, detail=f"Invalid input: {ve.messages}. Please correct the data and try again.")
 
