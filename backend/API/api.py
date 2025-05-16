@@ -169,7 +169,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         redis_cache = RedisCache()
         user = redis_cache.get_cached_user(form_data.username)
         if not user or not verify_password(form_data.password, user['password']):
-            raise HTTPException(status_code=401, detail="Invalid username or password")
+            raise HTTPException(status_code=401, detail="Invalid username or password)")
 
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = jwt.encode(

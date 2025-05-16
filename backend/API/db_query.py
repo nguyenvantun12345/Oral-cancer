@@ -20,9 +20,9 @@ class Patient:
         """Tạo nhiều bệnh nhân trong MongoDB."""
         try:
             validated_data = [self.schema.load(data) for data in data_list]
-            for doc in validated_data:
-                if 'password' in doc:
-                    doc['password'] = hash_password(doc['password'])
+            # for doc in validated_data:
+            #     if 'password' in doc:
+            #         doc['password'] = hash_password(doc['password'])
             result = self.collection.insert_many(validated_data)
             logger.info(f"Inserted {len(result.inserted_ids)} documents")
             return [str(doc["user_id"]) for doc in validated_data]

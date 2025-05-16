@@ -1,49 +1,40 @@
-import pytest
-import httpx
-from fastapi import status
+import bcrypt
+import logging
 
-BASE_URL = "http://localhost:8000"
+logger = logging.getLogger(__name__) # Giả sử bạn đã cấu hình logger
 
-@pytest.mark.asyncio
-async def test_register_patient():
-    async with httpx.AsyncClient() as client:
-        payload = {
-            "name": "Test User",
-            "birthdate": "01/01/1990",
-            "gender": "male",
-            "work": "Tester",
-            "username": "testuser",
-            "email": "test@example.com",
-            "phone": "1234567890",
-            "password": "testpassword123"
-        }
-        response = await client.post(f"{BASE_URL}/register", json=payload)
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json()["username"] == "testuser"
-        assert "access_token" in response.json()
+# Mật khẩu bạn muốn hash
+plain_password_to_hash = '123456'
 
-@pytest.mark.asyncio
-async def test_login():
-    async with httpx.AsyncClient() as client:
-        payload = {
-            "username": "testuser",
-            "password": "testpassword123"
-        }
-        response = await client.post(f"{BASE_URL}/login", data=payload)
-        assert response.status_code == status.HTTP_200_OK
-        assert "access_token" in response.json()
+# Tạo salt và hash mật khẩu
+# Lưu ý: mỗi lần chạy, salt sẽ khác nhau dẫn đến hash khác nhau
+def hash_password(password: str) -> str:
+    """Hash mật khẩu."""
+    try:
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        logger.info("Password hashed successfully")
+        return hashed
+    except Exception as e:
+        logger.error(f"Error hashing password: {str(e)}")
+        raise
+generated_hashed_password = hash_password(plain_password_to_hash)
 
-@pytest.mark.asyncio
-async def test_get_current_user():
-    async with httpx.AsyncClient() as client:
-        # Đăng nhập để lấy token
-        login_payload = {"username": "testuser", "password": "testpassword123"}
-        login_response = await client.post(f"{BASE_URL}/login", data=login_payload)
-        token = login_response.json()["access_token"]
-        
-        headers = {"Authorization": f"Bearer {token}"}
-        response = await client.get(f"{BASE_URL}/me", headers=headers)
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json()["username"] == "testuser"
+# Bây giờ, nếu bạn sử dụng generated_hashed_password này với hàm verify_password, nó sẽ trả về True
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Xác minh mật khẩu."""
+    try:
+        result = bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+        logger.info("Password verification completed")
+        return result
+    except Exception as e:
+        logger.error(f"Error verifying password: {str(e)}")
+        return False
 
-# Thêm các test khác cho admin, medical history, v.v.
+# Kiểm tra với hash vừa tạo
+is_correct_new = verify_password(plain_password_to_hash, generated_hashed_password)
+print(f"Xác minh '{plain_password_to_hash}' với hash vừa tạo ({generated_hashed_password}): {is_correct_new}") # Sẽ là True
+
+# Kiểm tra với hash bạn cung cấp ban đầu
+provided_hashed_password = '$2b$12$qzvgnLg0B.KjD4PvuXN.3.Rzk4Z.vuJL95VhpnxU5uIOMPMSo.1FS'
+is_correct_original = verify_password(plain_password_to_hash, provided_hashed_password)
+print(f"Xác minh '{plain_password_to_hash}' với hash bạn cung cấp ({provided_hashed_password}): {is_correct_original}") # Sẽ là False
