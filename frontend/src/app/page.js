@@ -5,7 +5,7 @@ import ImageUploader from '../components/ImageUploader';
 import './globals.css'; // Import your CSS file
 
 import React from 'react';
-import ObjectRecognizer from '../components/ObjectRecognizer'; // Import the component
+import OralCancerPredictor from '../components/OralCancerPredictor';
 
 // Assuming you might have Header and Footer components in separate files too
 // import YourHeaderComponent from './YourHeaderComponent';
@@ -21,7 +21,7 @@ export default function App() {
     <Layout>
       <div className="min-h-screen bg-gray-100">
         <main>
-          <ObjectRecognizer />
+          <OralCancerPredictor />
         </main>
 
         {/* <YourFooterComponent /> */}
