@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState,useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
 
@@ -8,37 +8,79 @@ const LoginPage = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [loading, setLoading] = useState(false);
   const router = useRouter();
+
+  // Check for token expiration on mount
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      try {
+        const decoded = jwt.decode(token);
+        if (decoded && decoded.exp) {
+          const expiration = new Date(decoded.exp * 1000);
+          if (expiration < new Date()) {
+            // Token expired, clear storage
+            localStorage.clear();
+            router.refresh();
+          }
+        }
+      } catch (error) {
+        localStorage.clear();
+        router.refresh();
+      }
+    }
+  }, [router]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
 
-    // Call your backend login API here (FastAPI endpoint)
+    // Basic validation
+    if (!username.trim() || !password.trim()) {
+      setErrorMessage('Username and password are required');
+      return;
+    }
+
     try {
-      const response = await fetch('http://your-api-url/auth/login', {
+      // Show loading state
+      setErrorMessage('');
+      setLoading(true);
+      
+      const response = await fetch('http://localhost:8000/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: new URLSearchParams({
-          username: username,
+          username: username.trim(),
           password: password,
         }),
       });
 
       const data = await response.json();
       if (response.ok) {
-        // Store the access token in localStorage (for example)
+        // Store the token and user data
         localStorage.setItem('token', data.access_token);
-        // Redirect to the profile page or home after successful login
-        router.push('/profile');
+        localStorage.setItem('refresh_token', data.refresh_token);
+        localStorage.setItem('user_id', data.user_id);
+        localStorage.setItem('username', data.username);
+        // Optionally set up token refresh interval if desired
+        // const expiration = data.expires_in * 1000;
+        // setTimeout(() => {
+        //   // You can implement a refresh here if you have a refresh endpoint
+        // }, expiration - 300000); // Refresh 5 minutes before expiration
+        // Redirect to the home page
+        router.push('/');
       } else {
-        setErrorMessage(data.detail || 'An error occurred');
+        setErrorMessage(data.detail || 'Invalid username or password');
+        setLoading(false);
       }
     } catch (error) {
       setErrorMessage('Login failed. Please try again later.');
+      setLoading(false);
     }
   };
+
 
   return (
     <Layout>

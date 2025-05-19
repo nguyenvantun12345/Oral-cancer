@@ -98,6 +98,22 @@ def validate_age(birthdate: str | datetime | date) -> tuple[bool, str]:
         return True, ""
     except ValueError:
         return False, "Birthdate must be in format dd/mm/yyyy."
+    """Kiểm tra tuổi hợp lệ dựa trên ngày sinh."""
+    try:
+        if isinstance(birthdate, str):
+            parsed_date = datetime.strptime(birthdate.strip(), '%d/%m/%Y')
+        elif isinstance(birthdate, (datetime, date)):
+            parsed_date = datetime.combine(birthdate, datetime.min.time()) if isinstance(birthdate, date) else birthdate
+        else:
+            return False, "Invalid birthdate format."
+
+        today = datetime.now()
+        age = today.year - parsed_date.year - ((today.month, today.day) < (parsed_date.month, parsed_date.day))
+        if age < 0 or age > 120:
+            return False, "Age must be between 0 and 120 years."
+        return True, ""
+    except ValueError:
+        return False, "Birthdate must be in format dd/mm/yyyy."
 
 @router.post("/register", response_model=Dict)
 async def register(patient: PatientCreate):
@@ -168,8 +184,11 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     try:
         redis_cache = RedisCache()
         user = redis_cache.get_cached_user(form_data.username)
+        logger.info(f"Login attempt for username: {form_data.username}")
+        logger.info(f"Received password length: {len(form_data.password)}")
+        logger.info(f"Stored password length: {len(user['password']) if user else 0}")
         if not user or not verify_password(form_data.password, user['password']):
-            raise HTTPException(status_code=401, detail="Invalid username or password)")
+            raise HTTPException(status_code=401, detail=f"Invalid username or password {user['password']}")
 
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = jwt.encode(

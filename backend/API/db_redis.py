@@ -104,11 +104,10 @@ class RedisCache:
     def get_cached_user(self, username: str) -> Optional[Dict]:
         user_key = f"user:{username}"
         cached_data = self.redis.get(user_key)
-
         if cached_data:
+            user_data = json.loads(cached_data)
             logger.info(f"Cache hit for user {username}")
-            return json.loads(cached_data)
-
+            return user_data
         logger.info(f"Cache miss for user {username}, querying MongoDB")
         patients = self.patient_repo.search_patients(username, limit=1)
         if patients:

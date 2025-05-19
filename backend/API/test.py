@@ -35,6 +35,6 @@ is_correct_new = verify_password(plain_password_to_hash, generated_hashed_passwo
 print(f"Xác minh '{plain_password_to_hash}' với hash vừa tạo ({generated_hashed_password}): {is_correct_new}") # Sẽ là True
 
 # Kiểm tra với hash bạn cung cấp ban đầu
-provided_hashed_password = '$2b$12$qzvgnLg0B.KjD4PvuXN.3.Rzk4Z.vuJL95VhpnxU5uIOMPMSo.1FS'
+provided_hashed_password = '$2b$12$30ws2ohWy1qnKSJdW.ACE.wwvw9K4MOEjx1rOBbcYZXhAemJ47cnG'
 is_correct_original = verify_password(plain_password_to_hash, provided_hashed_password)
 print(f"Xác minh '{plain_password_to_hash}' với hash bạn cung cấp ({provided_hashed_password}): {is_correct_original}") # Sẽ là False
