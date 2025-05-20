@@ -196,14 +196,20 @@ const OralCancerPredictor = () => {
       }
 
       const apiData = await apiResponse.json();
-
-      // Assuming your backend returns an object with 'diagnosis_score'
-      if (apiData && typeof apiData.diagnosis_score === 'number') {
-        setPrediction(apiData.diagnosis_score);
-        console.log("Diagnosis score received:", apiData.diagnosis_score);
+      // The backend now returns { histories: [latest_history] }
+      let diagnosisScore = null;
+      if (apiData && Array.isArray(apiData.histories) && apiData.histories.length > 0) {
+        const latestHistory = apiData.histories[0];
+        if (typeof latestHistory.diagnosis_score === 'number') {
+          diagnosisScore = latestHistory.diagnosis_score;
+        }
+      }
+      if (diagnosisScore !== null) {
+        setPrediction(diagnosisScore);
+        console.log("Diagnosis score received:", diagnosisScore);
       } else {
         // Backend returned OK status but unexpected data
-        throw new Error("Invalid response format from API. Expected diagnosis_score.");
+        throw new Error("Invalid response format from API. Expected diagnosis_score in histories.");
       }
 
     } catch (err) {
@@ -306,7 +312,7 @@ const OralCancerPredictor = () => {
         {prediction !== null && !isLoading && !errorMessage && (
           <div className="mt-8 text-center p-6 bg-green-50 border-2 border-green-400 rounded-lg shadow-md">
             <h2 className="text-2xl font-semibold text-gray-800 mb-2">Prediction Result</h2>
-            <p className="text-5xl font-bold text-green-600 my-3">{prediction}%</p>
+            <p className="text-5xl font-bold text-green-600 my-3">{Math.floor(prediction * 100)}%</p>
             <p className="text-md text-gray-700">Predicted Likelihood of Malignancy</p>
             <p className="text-xs text-gray-500 mt-4 px-2">
               This result is based on a simulated analysis. Always consult with a qualified healthcare professional for any medical concerns or for an accurate diagnosis.

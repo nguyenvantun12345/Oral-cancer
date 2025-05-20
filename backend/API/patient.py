@@ -3,11 +3,13 @@ from pydantic import BaseModel, validator
 from typing import Dict, Optional, List
 from datetime import datetime, timezone
 import logging
+import requests
 from db_redis import RedisCache
 from api import get_current_user, PatientUpdate, validate_age
 from db_schema import PatientSchema, MedicalHistorySchema
 from marshmallow import ValidationError
 from pydantic import BaseModel
+from diagnosis import predict_from_url
 
 class MedicalHistoryResponse(BaseModel):
     _id: Optional[str]
@@ -99,6 +101,22 @@ async def create_current_medical_history(image: ImageCreatePatient,
         image_data['comment'] = None
         image_data['diagnosis_score'] = None
 
+        # --- Integrate diagnosis model call ---
+        try:
+            # Local function call instead of API call
+            diagnosis_result = predict_from_url(image_data['image'])
+            print(diagnosis_result)
+            # Extract confidence score
+            diagnosis_score = diagnosis_result.get('probabilities', {}).get('Cancer')
+            if diagnosis_score is None:
+                raise Exception("Prediction result did not return a confidence score.")
+
+            # Add score to image data
+            image_data['diagnosis_score'] = diagnosis_score
+
+        except Exception as diag_e:
+            logger.error(f"Diagnosis failed: {diag_e}")
+            raise HTTPException(status_code=500, detail=f"Diagnosis failed: {diag_e}")
         medical_schema = MedicalHistorySchema()
         try:
             validated_data = medical_schema.load(image_data)
@@ -117,8 +135,12 @@ async def create_current_medical_history(image: ImageCreatePatient,
         )
 
         logger.info(f"Created medical history {validated_data['image_id']} for patient {current_user['user_id']}")
-        # Return the updated list of all histories for the user
+        # Return the latest created history (with diagnosis_score)
         all_histories = redis_cache.get_medical_history(current_user['user_id'])
+        if isinstance(all_histories, list):
+            # Return only the latest created history for frontend compatibility
+            latest_history = all_histories[-1] if all_histories else None
+            return {"histories": [latest_history] if latest_history else []}
         return {"histories": all_histories}
     except HTTPException as he:
         logger.error(f"HTTP error creating medical history: {he.detail}")
@@ -126,7 +148,6 @@ async def create_current_medical_history(image: ImageCreatePatient,
     except Exception as e:
         logger.error(f"Error creating medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/me/history", response_model=MedicalHistoryListResponse)
 async def get_current_medical_history(current_user: Dict = Depends(get_current_user)):

@@ -15,6 +15,7 @@ if not os.getenv("JWT_SECRET"):
 from api import router as api_router
 from patient import router as patient_router
 from admin import router as admin_router
+from diagnosis import router as diagnosis_router
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ async def validation_exception_handler(request, exc):
 app.include_router(api_router)
 app.include_router(patient_router)
 app.include_router(admin_router)
+app.include_router(diagnosis_router)
 
 if __name__ == "__main__":
     import uvicorn
