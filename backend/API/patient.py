@@ -1,12 +1,25 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, validator
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from datetime import datetime, timezone
 import logging
 from db_redis import RedisCache
 from api import get_current_user, PatientUpdate, validate_age
 from db_schema import PatientSchema, MedicalHistorySchema
 from marshmallow import ValidationError
+from pydantic import BaseModel
+
+class MedicalHistoryResponse(BaseModel):
+    _id: Optional[str]
+    image_id: str
+    user_id: str
+    image: str
+    comment: Optional[str]
+    date: List[str]
+    diagnosis_score: Optional[float]
+
+class MedicalHistoryListResponse(BaseModel):
+    histories: List[MedicalHistoryResponse]
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -74,7 +87,7 @@ async def update_current_patient(patient: PatientUpdate, current_user: Dict = De
         logger.error(f"Error updating patient: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/me/history", response_model=Dict)
+@router.post("/me/history", response_model=MedicalHistoryListResponse)
 async def create_current_medical_history(image: ImageCreatePatient, 
                                         current_user: Dict = Depends(get_current_user)):
     try:
@@ -88,7 +101,7 @@ async def create_current_medical_history(image: ImageCreatePatient,
 
         medical_schema = MedicalHistorySchema()
         try:
-            validated_data = medical_schema.load(image_data, partial=True)
+            validated_data = medical_schema.load(image_data)
         except ValidationError as ve:
             raise HTTPException(status_code=400, detail=f"Invalid medical history data: {ve.messages}. Please correct the data and try again.")
 
@@ -104,7 +117,9 @@ async def create_current_medical_history(image: ImageCreatePatient,
         )
 
         logger.info(f"Created medical history {validated_data['image_id']} for patient {current_user['user_id']}")
-        return validated_data
+        # Return the updated list of all histories for the user
+        all_histories = redis_cache.get_medical_history(current_user['user_id'])
+        return {"histories": all_histories}
     except HTTPException as he:
         logger.error(f"HTTP error creating medical history: {he.detail}")
         raise
@@ -112,15 +127,16 @@ async def create_current_medical_history(image: ImageCreatePatient,
         logger.error(f"Error creating medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/me/history", response_model=Dict)
+
+@router.get("/me/history", response_model=MedicalHistoryListResponse)
 async def get_current_medical_history(current_user: Dict = Depends(get_current_user)):
     try:
         if current_user['role'] != 'patient':
             raise HTTPException(status_code=403, detail="Only patients can view their own data")
 
         redis_cache = RedisCache()
-        history = redis_cache.get_medical_history(current_user['user_id'])
-        if not history:
+        histories = redis_cache.get_medical_history(current_user['user_id'])
+        if not histories:
             raise HTTPException(status_code=404, detail="Medical history not found")
 
         redis_cache.log_audit(
@@ -129,14 +145,15 @@ async def get_current_medical_history(current_user: Dict = Depends(get_current_u
             details={"user_id": current_user['user_id']}
         )
 
-        logger.info(f"Retrieved medical history for patient: {current_user['user_id']}")
-        return history
+        logger.info(f"Retrieved medical histories for patient: {current_user['user_id']}")
+        return {"histories": histories}
     except HTTPException as he:
         logger.error(f"HTTP error getting medical history: {he.detail}")
         raise
     except Exception as e:
         logger.error(f"Error getting medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.put("/me/history", response_model=Dict)
 async def update_current_medical_history(image: ImageUpdatePatient, 
@@ -264,7 +281,7 @@ async def update_patient(user_id: str, patient: PatientUpdate,
         logger.error(f"Error updating patient: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/{user_id}/history", response_model=Dict)
+@router.post("/{user_id}/history", response_model=MedicalHistoryListResponse)
 async def create_medical_history(user_id: str, image: ImageCreatePatient, 
                                 current_user: Dict = Depends(get_current_user)):
     try:
@@ -278,7 +295,7 @@ async def create_medical_history(user_id: str, image: ImageCreatePatient,
 
         medical_schema = MedicalHistorySchema()
         try:
-            validated_data = medical_schema.load(image_data, partial=True)
+            validated_data = medical_schema.load(image_data)
         except ValidationError as ve:
             raise HTTPException(status_code=400, detail=f"Invalid medical history data: {ve.messages}. Please correct the data and try again.")
 
@@ -294,7 +311,9 @@ async def create_medical_history(user_id: str, image: ImageCreatePatient,
         )
 
         logger.info(f"Created medical history {validated_data['image_id']} for patient {user_id}")
-        return validated_data
+        # Return the updated list of all histories for the user
+        all_histories = redis_cache.get_medical_history(user_id)
+        return {"histories": all_histories}
     except HTTPException as he:
         logger.error(f"HTTP error creating medical history: {he.detail}")
         raise
@@ -302,15 +321,16 @@ async def create_medical_history(user_id: str, image: ImageCreatePatient,
         logger.error(f"Error creating medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/{user_id}/history", response_model=Dict)
+
+@router.get("/{user_id}/history", response_model=MedicalHistoryListResponse)
 async def get_medical_history(user_id: str, current_user: Dict = Depends(get_current_user)):
     try:
         if current_user['role'] == 'patient' and current_user['user_id'] != user_id:
             raise HTTPException(status_code=403, detail="Patients can only view their own data")
 
         redis_cache = RedisCache()
-        history = redis_cache.get_medical_history(user_id)
-        if not history:
+        histories = redis_cache.get_medical_history(user_id)
+        if not histories:
             raise HTTPException(status_code=404, detail="Medical history not found")
 
         redis_cache.log_audit(
@@ -319,14 +339,15 @@ async def get_medical_history(user_id: str, current_user: Dict = Depends(get_cur
             details={"user_id": user_id}
         )
 
-        logger.info(f"Retrieved medical history for patient: {user_id}")
-        return history
+        logger.info(f"Retrieved medical histories for patient: {user_id}")
+        return {"histories": histories}
     except HTTPException as he:
         logger.error(f"HTTP error getting medical history: {he.detail}")
         raise
     except Exception as e:
         logger.error(f"Error getting medical history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.put("/{user_id}/history", response_model=Dict)
 async def update_medical_history(user_id: str, image: ImageUpdatePatient, 

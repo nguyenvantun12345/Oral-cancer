@@ -156,6 +156,7 @@ const OralCancerPredictor = () => {
         headers: {
           // --- Add the Authorization header with the token ---
           'Authorization': `Bearer ${jwtToken}`,
+          'Content-Type': 'application/json',
           // --- End Add Authorization header ---
         },
         body: JSON.stringify({ image: imageUrl }),

@@ -35,9 +35,11 @@ class RedisCache:
             logger.error(f"Failed to connect to Redis: {str(e)}")
             raise
 
-    def _serialize_mongo_document(self, data: Dict) -> Dict:
+    def _serialize_mongo_document(self, data):
         if not data:
             return data
+        if isinstance(data, list):
+            return [self._serialize_mongo_document(item) for item in data]
         serialized = data.copy()
         if '_id' in serialized:
             serialized['_id'] = str(serialized['_id'])
@@ -213,15 +215,11 @@ class RedisCache:
                 return False
 
             user_id = medical_history['user_id']
-            image_key = f"medical:{user_id}:latest"
-            serialized_history = self._serialize_mongo_document(medical_history)
-            if 'date' in serialized_history:
-                serialized_history['date'] = [
-                    d.isoformat() if isinstance(d, datetime) else d
-                    for d in serialized_history['date']
-                ]
-            self.redis.setex(image_key, timedelta(seconds=self.ttl), json.dumps(serialized_history))
-            logger.info(f"Cached medical history for user_id {user_id}")
+            # After creation, fetch all histories and cache them
+            all_histories = self.history_repo.get_medical_history_by_user_id(user_id)
+            serialized_histories = self._serialize_mongo_document(all_histories)
+            self.redis.setex(f"medical:{user_id}:all", timedelta(seconds=self.ttl), json.dumps(serialized_histories))
+            logger.info(f"Cached all medical histories for user_id {user_id}")
             return True
         except Exception as e:
             logger.error(f"Error creating medical history: {str(e)}")
@@ -251,27 +249,20 @@ class RedisCache:
             logger.error(f"Error updating medical history: {str(e)}")
             return False
 
-    def get_medical_history(self, user_id: str) -> Optional[Dict]:
-        image_key = f"medical:{user_id}:latest"
-        cached_data = self.redis.get(image_key)
+    def get_medical_history(self, user_id: str) -> Optional[list]:
+        cache_key = f"medical:{user_id}:all"
+        cached_data = self.redis.get(cache_key)
 
         if cached_data:
-            logger.info(f"Cache hit for medical history {user_id}")
+            logger.info(f"Cache hit for all medical histories {user_id}")
             return json.loads(cached_data)
 
-        logger.info(f"Cache miss for medical history {user_id}, querying MongoDB")
-        medical_data = self.history_repo.get_medical_history_by_user_id(user_id)
-        if medical_data:
-            serialized_data = self._serialize_mongo_document(medical_data)
-            if 'date' in serialized_data:
-                serialized_data['date'] = [
-                    d.isoformat() if isinstance(d, datetime) else d
-                    for d in serialized_data['date']
-                ]
-            self.redis.setex(image_key, timedelta(seconds=self.ttl), json.dumps(serialized_data))
-            logger.info(f"Cached medical history {user_id} from MongoDB")
-            return serialized_data
-        return None
+        logger.info(f"Cache miss for all medical histories {user_id}, querying MongoDB")
+        all_histories = self.history_repo.get_medical_history_by_user_id(user_id)
+        serialized_histories = self._serialize_mongo_document(all_histories)
+        self.redis.setex(cache_key, timedelta(seconds=self.ttl), json.dumps(serialized_histories))
+        logger.info(f"Cached all medical histories {user_id} from MongoDB")
+        return serialized_histories
 
     def delete_medical_history(self, user_id: str) -> bool:
         try:

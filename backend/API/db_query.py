@@ -117,16 +117,10 @@ class MedicalHistoryCRUD:
         self.schema = MedicalHistorySchema()
 
     def create_medical_history(self, medical_history: dict) -> bool:
-        """Tạo mới lịch sử y tế, thêm thời gian vào mảng date."""
+        """Create a new medical history for a user (multiple allowed per user)."""
         try:
             validated_data = self.schema.load(medical_history)
-            existing = self.collection.find_one({"user_id": validated_data["user_id"]})
-            if existing:
-                logger.warning(f"Medical history already exists for user_id: {validated_data['user_id']}. Use update instead.")
-                return False
-            
             validated_data["date"] = validated_data.get("date", []) + [datetime.now().isoformat()]
-            
             result = self.collection.insert_one(validated_data)
             if result.inserted_id:
                 logger.info(f"Created medical history with image_id: {validated_data['image_id']}")
@@ -165,14 +159,20 @@ class MedicalHistoryCRUD:
             logger.error(f"Error updating medical history: {str(e)}")
             return False
 
-    def get_medical_history_by_user_id(self, user_id: str) -> Optional[dict]:
-        """Lấy lịch sử y tế theo user_id."""
+    def get_medical_history_by_user_id(self, user_id: str) -> list:
+        """Get all medical histories for a user as a list."""
         try:
-            history = self.collection.find_one({"user_id": user_id})
-            return history if history else {}
+            histories = list(self.collection.find({"user_id": user_id}))
+            # Convert ObjectId to str for each document
+            for h in histories:
+                if '_id' in h:
+                    h['_id'] = str(h['_id'])
+                if 'date' in h and isinstance(h['date'], list):
+                    h['date'] = [d.isoformat() if hasattr(d, 'isoformat') else d for d in h['date']]
+            return histories
         except Exception as e:
-            logger.error(f"Error retrieving medical history for user_id {user_id}: {str(e)}")
-            return {}
+            logger.error(f"Error retrieving medical histories for user_id {user_id}: {str(e)}")
+            return []
 
     def delete_medical_history(self, user_id: str) -> bool:
         """Xóa lịch sử y tế theo user_id."""
