@@ -1,4 +1,5 @@
 # Data-Mining---Cancer-Diagnosis
+Chuẩn bị các yêu cầu:
 
 1. git clone https://github.com/vietanh03nguyen/Data-Mining---Cancer-Diagnosis.git
 
@@ -9,11 +10,15 @@
 4. cd frontend
 npm install
 
-5. sử dụng file .env đi kèm trong folder Hướng dẫn cài đặt vào folder của project
+5. sử dụng file .env đi kèm trong folder "Hướng dẫn cài" thả vào folder backend/API
 
-6. Chạy backend: cd vào backend/API
+6. Cài đặt Redis (Memurai trên Windows, Redis trên Linux)
+
+
+Chạy frontend và backend:
+1. Chạy backend: cd vào backend/API
     fastapi run dev
 
-7. Chạy frontend: cd vào frontend
+2. Chạy frontend: cd vào frontend
     npm run dev
 
