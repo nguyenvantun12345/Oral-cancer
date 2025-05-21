@@ -64,6 +64,7 @@ const LoginPage = () => {
         localStorage.setItem('refresh_token', data.refresh_token);
         localStorage.setItem('user_id', data.user_id);
         localStorage.setItem('username', data.username);
+        localStorage.setItem('role', data.role);
         // Optionally set up token refresh interval if desired
         // const expiration = data.expires_in * 1000;
         // setTimeout(() => {

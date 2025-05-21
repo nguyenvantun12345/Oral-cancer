@@ -20,7 +20,7 @@ export default function Navbar() {
     localStorage.removeItem('role');
     setIsLoggedIn(false);
     setIsAdmin(false);
-    // Redirect or reload if needed
+    window.location.href = '/login';
   };
 
   return (

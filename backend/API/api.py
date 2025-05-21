@@ -222,6 +222,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             "refresh_token": refresh_token,
             "token_type": "bearer",
             "user_id": user['user_id'],
+            "role": user['role'],
             "username": form_data.username,
             "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
         }
