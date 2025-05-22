@@ -177,8 +177,13 @@ async def read_multiple_patients(search_text: str = "", limit: int = 10, skip: i
         logger.error(f"Error reading patients: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+from starlette.concurrency import run_in_threadpool
+
 @router.delete("/patients/bulk-delete", response_model=Dict)
-async def delete_multiple_patients(delete_request: DeleteRequest, current_user: Dict = Depends(get_current_user)):
+async def delete_multiple_patients(
+    delete_request: DeleteRequest,
+    current_user: Dict = Depends(get_current_user)
+):
     try:
         if current_user['role'] != 'admin':
             raise HTTPException(status_code=403, detail="Only admins can delete patients")
@@ -188,16 +193,18 @@ async def delete_multiple_patients(delete_request: DeleteRequest, current_user: 
 
         redis_cache = RedisCache()
         deleted_ids = []
-        
+
         logger.info(f"Starting deletion process with {delete_request.wait_seconds}s wait period")
         await asyncio.sleep(delete_request.wait_seconds)  # Wait period for cancellation
 
         for user_id in delete_request.user_ids:
-            if redis_cache.delete_patient(user_id):
+            deleted = await run_in_threadpool(redis_cache.delete_patient, user_id)
+            if deleted:
                 deleted_ids.append(user_id)
-                redis_cache.delete_medical_history(user_id)  # Also delete medical history
+                await run_in_threadpool(redis_cache.delete_medical_history, user_id)
 
-        redis_cache.log_audit(
+        await run_in_threadpool(
+            redis_cache.log_audit,
             action="bulk_delete_patients",
             user_id=current_user['user_id'],
             details={"deleted_ids": deleted_ids, "wait_seconds": delete_request.wait_seconds}
@@ -205,6 +212,7 @@ async def delete_multiple_patients(delete_request: DeleteRequest, current_user: 
 
         logger.info(f"Deleted {len(deleted_ids)} patients")
         return {"message": f"Deleted {len(deleted_ids)} patients", "deleted_ids": deleted_ids}
+
     except HTTPException as he:
         logger.error(f"HTTP error deleting patients: {he.detail}")
         raise
