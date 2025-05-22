@@ -78,14 +78,14 @@ class Patient:
                 return False
             
             # Chỉ cập nhật MedicalHistory nếu đã tồn tại
-            existing_history = self.medical_crud.get_medical_history_by_user_id(user_id)
-            if existing_history:
-                medical_update = {
-                    "user_id": user_id,
-                    "date": existing_history.get("date", []) + [datetime.now().isoformat()]
-                }
-                self.medical_crud.update_medical_history(user_id, medical_update)
-                logger.info(f"Updated medical history date for user_id: {user_id}")
+            # existing_history = self.medical_crud.get_medical_history_by_user_id(user_id)
+            # if existing_history:
+            #     medical_update = {
+            #         "user_id": user_id,
+            #         "date": existing_history.get("date", []) + [datetime.now().isoformat()]
+            #     }
+            #     self.medical_crud.update_medical_history(user_id, medical_update)
+            #     logger.info(f"Updated medical history date for user_id: {user_id}")
             
             logger.info(f"Updated patient for user_id: {user_id}")
             return True
