@@ -188,7 +188,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         logger.info(f"Received password length: {len(form_data.password)}")
         logger.info(f"Stored password length: {len(user['password']) if user else 0}")
         if not user or not verify_password(form_data.password, user['password']):
-            raise HTTPException(status_code=401, detail=f"Invalid username or password {user['password']}")
+            raise HTTPException(status_code=401, detail="Invalid username or password")
 
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = jwt.encode(
