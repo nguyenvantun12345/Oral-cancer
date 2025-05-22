@@ -58,16 +58,32 @@ async def update_current_patient(patient: PatientUpdate, current_user: Dict = De
             raise HTTPException(status_code=403, detail="Only patients can update their own data")
 
         patient_data = patient.dict(exclude_unset=True)
+
+        # Convert birthdate format if present
+        if 'birthdate' in patient_data and patient_data['birthdate']:
+            # Try to parse any reasonable input date format and convert to dd/mm/yyyy
+            try:
+                # Try to parse ISO or other common formats; adapt as needed
+                parsed_date = datetime.strptime(patient_data['birthdate'], '%Y-%m-%d')
+            except ValueError:
+                # If failed, try parsing dd/mm/yyyy directly (in case user sends correct format)
+                try:
+                    parsed_date = datetime.strptime(patient_data['birthdate'], '%d/%m/%Y')
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Invalid birthdate format. Expected ISO 'yyyy-mm-dd' or 'dd/mm/yyyy'.")
+
+            # Now convert to dd/mm/yyyy string format
+            patient_data['birthdate'] = parsed_date.strftime('%d/%m/%Y')
+
         patient_schema = PatientSchema()
         try:
             patient_schema.load(patient_data, partial=True)
         except ValidationError as ve:
             raise HTTPException(status_code=400, detail=f"Invalid input: {ve.messages}. Please correct the data and try again.")
 
-        if 'birthdate' in patient_data and patient_data['birthdate']:
-            is_valid, error_message = validate_age(patient_data['birthdate'])
-            if not is_valid:
-                raise HTTPException(status_code=400, detail=f"Invalid birthdate: {error_message}. Please correct and try again.")
+        is_valid, error_message = validate_age(patient_data['birthdate'])
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=f"Invalid birthdate: {error_message}. Please correct and try again.")
 
         redis_cache = RedisCache()
         if not redis_cache.update_patient(current_user['user_id'], patient_data):
